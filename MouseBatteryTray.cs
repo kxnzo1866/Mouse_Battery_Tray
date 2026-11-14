@@ -1,5 +1,6 @@
-// Pulsar Battery Tray - shows the battery level of a Pulsar mouse (X2 V2 Mini) in the Windows notification area.
-// Protocol taken from the open-source project python-pulsar-mouse-tool (andrewrabert, MIT license).
+// Mouse Battery Tray - shows the battery level of a wireless mouse (Pulsar, Logitech) in the Windows notification area.
+// Pulsar protocol taken from the open-source project python-pulsar-mouse-tool (andrewrabert, MIT license).
+// Logitech support uses the HID++ 2.0 protocol (device name 0x0005, battery features 0x1004, 0x1000, 0x1001).
 // Build: see build.ps1 (uses the csc.exe that ships with Windows, no dependencies).
 
 using System;
@@ -11,19 +12,20 @@ using System.Drawing.Text;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 
-[assembly: System.Reflection.AssemblyTitle("Pulsar Battery Tray")]
-[assembly: System.Reflection.AssemblyProduct("Pulsar Battery Tray")]
-[assembly: System.Reflection.AssemblyDescription("Battery level of a Pulsar mouse in the notification area (unofficial project)")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyTitle("Mouse Battery Tray")]
+[assembly: System.Reflection.AssemblyProduct("Mouse Battery Tray")]
+[assembly: System.Reflection.AssemblyDescription("Battery level of a wireless mouse (Pulsar, Logitech) in the notification area (unofficial project)")]
+[assembly: System.Reflection.AssemblyVersion("1.1.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.1.0.0")]
 
-namespace PulsarBattery
+namespace MouseBatteryTray
 {
     enum MouseState { NoDevice, Asleep, Ok, Error }
     enum IconMode { Normal, Charging, Dim, Empty }
@@ -31,26 +33,23 @@ namespace PulsarBattery
     class Reading
     {
         public MouseState State = MouseState.NoDevice;
+        public string Key = "";          // stable identifier, e.g. "pulsar:Pulsar X2 V2 Mini"
+        public string Brand = "";        // "Pulsar", "Logitech"
+        public string Name = "";         // display name read from the device
+        public string Connection = "";   // "USB cable", "2.4 GHz wireless receiver", "Bluetooth"
         public int Percent;
         public bool Charging;
+        public bool Full;                // plugged in and fully charged
         public int Millivolts;
-        public int ProductId;
-        public string Error;
+        public bool VoltageBased;        // level estimated from the voltage: overestimated while charging
         public DateTime Time = DateTime.Now;
     }
 
     // ------------------------------------------------------------------
-    //  HID communication with the mouse / receiver
+    //  Low-level HID access shared by all brands
     // ------------------------------------------------------------------
-    static class Device
+    static class Hid
     {
-        const string VendorTag = "vid_3554";      // Pulsar
-        const int PidWired = 0xF507;              // X2 V2 Mini plugged in over USB
-        const byte ReportId = 0x08;
-        const byte CmdStatus = 0x03;
-        const byte CmdPower = 0x04;
-        const int PacketLen = 17;
-
         [StructLayout(LayoutKind.Sequential)]
         struct SP_DEVICE_INTERFACE_DATA
         {
@@ -61,7 +60,7 @@ namespace PulsarBattery
         }
 
         [StructLayout(LayoutKind.Sequential)]
-        struct HIDP_CAPS
+        public struct HIDP_CAPS
         {
             public ushort Usage;
             public ushort UsagePage;
@@ -91,7 +90,9 @@ namespace PulsarBattery
         [DllImport("hid.dll")]
         static extern int HidP_GetCaps(IntPtr data, out HIDP_CAPS caps);
         [DllImport("hid.dll", SetLastError = true)]
-        static extern bool HidD_SetOutputReport(SafeFileHandle h, byte[] buf, int len);
+        public static extern bool HidD_SetOutputReport(SafeFileHandle h, byte[] buf, int len);
+        [DllImport("hid.dll", CharSet = CharSet.Unicode)]
+        static extern bool HidD_GetProductString(SafeFileHandle h, StringBuilder buf, int len);
 
         [DllImport("setupapi.dll", SetLastError = true)]
         static extern IntPtr SetupDiGetClassDevs(ref Guid g, IntPtr enumerator, IntPtr hwnd, int flags);
@@ -105,8 +106,10 @@ namespace PulsarBattery
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode, EntryPoint = "CreateFileW")]
         static extern SafeFileHandle CreateFile(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr template);
 
-        static List<string> FindPaths()
+        // Lists the HID interfaces of a vendor. USB paths contain "vid_xxxx", Bluetooth paths "vid&0002xxxx" or "vid&02xxxx".
+        public static List<string> FindPaths(string vendorId)
         {
+            Regex vendor = new Regex(@"vid[_&](0002|02)?" + vendorId + "(?![0-9a-f])", RegexOptions.IgnoreCase);
             List<string> list = new List<string>();
             Guid g;
             HidD_GetHidGuid(out g);
@@ -129,7 +132,7 @@ namespace PulsarBattery
                         if (SetupDiGetDeviceInterfaceDetail(set, ref d, buf, req, out req, IntPtr.Zero))
                         {
                             string path = Marshal.PtrToStringUni(IntPtr.Add(buf, 4));
-                            if (path != null && path.ToLowerInvariant().Contains(VendorTag)) list.Add(path);
+                            if (path != null && vendor.IsMatch(path)) list.Add(path);
                         }
                     }
                     finally { Marshal.FreeHGlobal(buf); }
@@ -139,14 +142,115 @@ namespace PulsarBattery
             return list;
         }
 
-        static int ParsePid(string path)
+        public static SafeFileHandle Open(string path)
+        {
+            return CreateFile(path, 0xC0000000, 3, IntPtr.Zero, 3, 0x40000000, IntPtr.Zero);
+        }
+
+        public static int LastError() { return Marshal.GetLastWin32Error(); }
+
+        public static bool GetCaps(SafeFileHandle h, out HIDP_CAPS caps)
+        {
+            caps = new HIDP_CAPS();
+            IntPtr pp;
+            if (!HidD_GetPreparsedData(h, out pp)) return false;
+            try { HidP_GetCaps(pp, out caps); }
+            finally { HidD_FreePreparsedData(pp); }
+            return true;
+        }
+
+        public static string ProductString(SafeFileHandle h)
+        {
+            StringBuilder sb = new StringBuilder(128);
+            try { if (HidD_GetProductString(h, sb, sb.Capacity * 2)) return sb.ToString().Trim(); }
+            catch { }
+            return "";
+        }
+
+        public static int ParsePid(string path)
+        {
+            Match m = Regex.Match(path, @"pid[_&]([0-9a-f]{4})", RegexOptions.IgnoreCase);
+            int pid;
+            return m.Success && int.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out pid) ? pid : 0;
+        }
+
+        public static bool IsBluetooth(string path)
         {
             string p = path.ToLowerInvariant();
-            int i = p.IndexOf("pid_");
-            if (i < 0 || i + 8 > p.Length) return 0;
-            int pid;
-            return int.TryParse(p.Substring(i + 4, 4), System.Globalization.NumberStyles.HexNumber, null, out pid) ? pid : 0;
+            return p.Contains("{00001124-0000-1000-8000-00805f9b34fb}") || p.Contains("{00001812-0000-1000-8000-00805f9b34fb}");
         }
+
+        public static string Hex(byte[] b)
+        {
+            return BitConverter.ToString(b).Replace("-", " ");
+        }
+    }
+
+    // One opened HID interface. A read that timed out stays pending and is reused by the next Read,
+    // so a late reply is never lost and never mixed up with a later request.
+    class HidChannel : IDisposable
+    {
+        readonly SafeFileHandle handle;
+        readonly FileStream stream;
+        readonly int inLen;
+        IAsyncResult pending;
+        byte[] pendingBuf;
+
+        public HidChannel(SafeFileHandle h, int inputLength)
+        {
+            handle = h;
+            inLen = inputLength;
+            stream = new FileStream(h, FileAccess.ReadWrite, inLen, true);
+        }
+
+        // controlFirst: send through a SET_REPORT control transfer first (Pulsar), otherwise a normal write first (Logitech).
+        public bool Write(byte[] data, bool controlFirst, StringBuilder log)
+        {
+            if (controlFirst && Hid.HidD_SetOutputReport(handle, data, data.Length)) return true;
+            try
+            {
+                stream.Write(data, 0, data.Length);
+                stream.Flush();
+                return true;
+            }
+            catch (Exception e)
+            {
+                if (!controlFirst && Hid.HidD_SetOutputReport(handle, data, data.Length)) return true;
+                if (log != null) log.AppendLine("    send failed (" + e.Message + ")");
+                return false;
+            }
+        }
+
+        public byte[] Read(int timeoutMs)
+        {
+            if (pending == null)
+            {
+                pendingBuf = new byte[inLen];
+                pending = stream.BeginRead(pendingBuf, 0, inLen, null, null);
+            }
+            if (!pending.AsyncWaitHandle.WaitOne(Math.Max(0, timeoutMs))) return null;
+            IAsyncResult done = pending;
+            pending = null;
+            int n = stream.EndRead(done);
+            return n > 0 ? pendingBuf : null;
+        }
+
+        public void Dispose()
+        {
+            try { stream.Dispose(); } catch { }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    //  Pulsar (X2 V2 Mini and mice using the same protocol)
+    // ------------------------------------------------------------------
+    static class PulsarDevices
+    {
+        const int PidWired = 0xF507;              // X2 V2 Mini plugged in over USB
+        const byte ReportId = 0x08;
+        const byte CmdStatus = 0x03;
+        const byte CmdPower = 0x04;
+        const int PacketLen = 17;
 
         static byte[] Build(byte cmd)
         {
@@ -159,120 +263,325 @@ namespace PulsarBattery
             return p;
         }
 
-        static string Hex(byte[] b)
+        static byte[] Transact(HidChannel ch, byte cmd, StringBuilder log)
         {
-            return BitConverter.ToString(b).Replace("-", " ");
-        }
-
-        // Sends a command and waits for the matching reply. "dead" = a read is still pending,
-        // the stream must not be reused.
-        static byte[] Transact(SafeFileHandle h, FileStream fs, byte cmd, int inLen, StringBuilder log, out bool dead)
-        {
-            dead = false;
             byte[] req = Build(cmd);
-            if (!HidD_SetOutputReport(h, req, req.Length))
-            {
-                int err = Marshal.GetLastWin32Error();
-                try { fs.Write(req, 0, req.Length); fs.Flush(); }
-                catch (Exception e)
-                {
-                    if (log != null) log.AppendLine("    send failed (SetOutputReport err " + err + ", Write: " + e.Message + ")");
-                    return null;
-                }
-            }
-            if (log != null) log.AppendLine("    -> " + Hex(req));
+            if (!ch.Write(req, true, log)) return null;
+            if (log != null) log.AppendLine("    -> " + Hid.Hex(req));
             DateTime deadline = DateTime.UtcNow.AddMilliseconds(1000);
             while (true)
             {
                 int left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
-                if (left <= 0) return null;
-                byte[] buf = new byte[inLen];
-                IAsyncResult ar = fs.BeginRead(buf, 0, inLen, null, null);
-                if (!ar.AsyncWaitHandle.WaitOne(left))
+                byte[] buf = left > 0 ? ch.Read(left) : null;
+                if (buf == null)
                 {
-                    dead = true;
                     if (log != null) log.AppendLine("    <- (no reply)");
                     return null;
                 }
-                int n = fs.EndRead(ar);
-                if (log != null) log.AppendLine("    <- " + Hex(buf) + " (" + n + " bytes)");
-                if (n >= 10 && buf[0] == ReportId && buf[1] == cmd) return buf;
+                if (log != null) log.AppendLine("    <- " + Hid.Hex(buf));
+                if (buf[0] == ReportId && buf[1] == cmd) return buf;
             }
         }
 
-        public static Reading Read(StringBuilder log)
+        static string MakeName(string product)
         {
-            Reading best = new Reading();
-            try
+            if (product.Length == 0) return "Pulsar mouse";
+            if (product.StartsWith("pulsar", StringComparison.OrdinalIgnoreCase)) return product;
+            return "Pulsar " + product;
+        }
+
+        public static void Read(List<Reading> found, StringBuilder log)
+        {
+            List<string> paths = Hid.FindPaths("3554");
+            if (log != null) log.AppendLine("Pulsar: " + paths.Count + " HID interface(s)");
+            Reading best = null;
+            foreach (string path in paths)
             {
-                List<string> paths = FindPaths();
-                if (log != null) log.AppendLine(paths.Count + " Pulsar HID interface(s) found");
-                foreach (string path in paths)
+                int pid = Hid.ParsePid(path);
+                using (SafeFileHandle h = Hid.Open(path))
                 {
-                    int pid = ParsePid(path);
+                    if (h.IsInvalid) continue;
+                    Hid.HIDP_CAPS caps;
+                    if (!Hid.GetCaps(h, out caps)) continue;
+                    if (caps.InputReportByteLength != PacketLen || caps.OutputReportByteLength != PacketLen) continue;
                     if (log != null) log.AppendLine("  " + path);
-                    using (SafeFileHandle h = CreateFile(path, 0xC0000000, 3, IntPtr.Zero, 3, 0x40000000, IntPtr.Zero))
+                    string name = MakeName(Hid.ProductString(h));
+
+                    using (HidChannel ch = new HidChannel(h, PacketLen))
                     {
-                        if (h.IsInvalid)
+                        byte[] st = Transact(ch, CmdStatus, log);
+                        if (st == null) continue;
+                        Reading r = new Reading();
+                        r.Brand = "Pulsar";
+                        r.Name = name;
+                        r.Key = "pulsar:" + name;
+                        r.Connection = pid == PidWired ? "USB cable" : "2.4 GHz wireless receiver";
+                        r.VoltageBased = true;
+                        if (st[6] == 0)   // receiver present but mouse off / asleep
                         {
-                            if (log != null) log.AppendLine("    open denied (err " + Marshal.GetLastWin32Error() + ")");
+                            r.State = MouseState.Asleep;
+                            if (best == null) best = r;
                             continue;
                         }
-                        IntPtr pp;
-                        if (!HidD_GetPreparsedData(h, out pp)) continue;
-                        HIDP_CAPS caps;
-                        HidP_GetCaps(pp, out caps);
-                        HidD_FreePreparsedData(pp);
-                        if (log != null)
-                            log.AppendLine("    usage " + caps.UsagePage.ToString("X4") + ":" + caps.Usage.ToString("X4") +
-                                           " in=" + caps.InputReportByteLength + " out=" + caps.OutputReportByteLength);
-                        if (caps.InputReportByteLength != PacketLen || caps.OutputReportByteLength != PacketLen) continue;
 
-                        using (FileStream fs = new FileStream(h, FileAccess.ReadWrite, PacketLen, true))
-                        {
-                            bool dead;
-                            byte[] st = Transact(h, fs, CmdStatus, PacketLen, log, out dead);
-                            if (st == null) continue;
-                            if (best.State == MouseState.NoDevice)
-                            {
-                                best.State = MouseState.Asleep;
-                                best.ProductId = pid;
-                            }
-                            if (st[6] == 0) continue;   // receiver present but mouse off / asleep
-
-                            byte[] pw = Transact(h, fs, CmdPower, PacketLen, log, out dead);
-                            if (pw == null || pw[6] > 100) continue;
-                            Reading r = new Reading();
-                            r.State = MouseState.Ok;
-                            r.Percent = pw[6];
-                            r.Charging = pw[7] != 0;
-                            r.Millivolts = (pw[8] << 8) | pw[9];
-                            r.ProductId = pid;
-                            // If the mouse is also plugged in over USB, prefer that reading.
-                            if (best.State != MouseState.Ok || pid == PidWired) best = r;
-                        }
+                        byte[] pw = Transact(ch, CmdPower, log);
+                        if (pw == null || pw[6] > 100) continue;
+                        r.State = MouseState.Ok;
+                        r.Percent = pw[6];
+                        r.Charging = pw[7] != 0;
+                        r.Millivolts = (pw[8] << 8) | pw[9];
+                        r.Full = r.Charging && r.Percent >= 100;
+                        // If the mouse is also plugged in over USB, prefer that reading.
+                        if (best == null || best.State != MouseState.Ok || pid == PidWired) best = r;
                     }
                 }
             }
-            catch (Exception e)
+            if (best != null) found.Add(best);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    //  Logitech (HID++ 2.0: Lightspeed, Unifying, Bolt receivers, USB cable, Bluetooth)
+    // ------------------------------------------------------------------
+    static class LogitechDevices
+    {
+        const byte LongReport = 0x11;
+        const byte SoftwareId = 0x0B;
+        const int ReplyTimeout = 500;
+        const int LongLen = 20;
+
+        // Sends a request and returns the matching reply, or null on error / timeout.
+        static byte[] Request(HidChannel ch, byte dev, byte feature, int function, byte[] args, StringBuilder log)
+        {
+            byte[] req = new byte[LongLen];
+            req[0] = LongReport;
+            req[1] = dev;
+            req[2] = feature;
+            req[3] = (byte)((function << 4) | SoftwareId);
+            if (args != null) Array.Copy(args, 0, req, 4, Math.Min(args.Length, 16));
+            if (!ch.Write(req, false, log)) return null;
+            if (log != null) log.AppendLine("    -> " + Hid.Hex(req));
+            DateTime deadline = DateTime.UtcNow.AddMilliseconds(ReplyTimeout);
+            while (true)
             {
-                if (best.State != MouseState.Ok)
+                int left = (int)(deadline - DateTime.UtcNow).TotalMilliseconds;
+                byte[] r = left > 0 ? ch.Read(left) : null;
+                if (r == null)
                 {
-                    best.State = MouseState.Error;
-                    best.Error = e.Message;
+                    if (log != null) log.AppendLine("    <- (no reply)");
+                    return null;
                 }
-                if (log != null) log.AppendLine("Exception: " + e);
+                if (log != null) log.AppendLine("    <- " + Hid.Hex(r));
+                if (r[1] != dev) continue;
+                bool error20 = r[0] == LongReport && r[2] == 0xFF && r[3] == feature && r[4] == req[3];
+                bool error10 = r[2] == 0x8F && r[3] == feature && r[4] == req[3];
+                if (error20 || error10) return null;
+                if (r[0] == LongReport && r[2] == feature && r[3] == req[3]) return r;
             }
-            best.Time = DateTime.Now;
-            return best;
         }
 
-        public static string ConnectionName(int pid)
+        // HID++ protocol version of the device at this index (0 = no HID++ 2.0 device there).
+        static int Ping(HidChannel ch, byte dev, StringBuilder log)
         {
-            if (pid == PidWired) return "USB cable";
-            if (pid == 0) return "—";
-            return "2.4 GHz wireless receiver";
+            byte[] r = Request(ch, dev, 0x00, 1, new byte[] { 0, 0, 0x5A }, log);
+            return r == null ? 0 : r[4];
         }
+
+        static byte FeatureIndex(HidChannel ch, byte dev, int featureId, StringBuilder log)
+        {
+            byte[] r = Request(ch, dev, 0x00, 0, new byte[] { (byte)(featureId >> 8), (byte)featureId }, log);
+            return r == null ? (byte)0 : r[4];
+        }
+
+        public static void Read(List<Reading> found, StringBuilder log)
+        {
+            List<string> paths = Hid.FindPaths("046d");
+            if (log != null) log.AppendLine("Logitech: " + paths.Count + " HID interface(s)");
+            foreach (string path in paths)
+            {
+                using (SafeFileHandle h = Hid.Open(path))
+                {
+                    if (h.IsInvalid) continue;
+                    Hid.HIDP_CAPS caps;
+                    if (!Hid.GetCaps(h, out caps)) continue;
+                    // HID++ long-report collection: vendor usage page (FF00 or FF43), 20-byte reports.
+                    if (caps.UsagePage < 0xFF00 || caps.InputReportByteLength != LongLen || caps.OutputReportByteLength != LongLen) continue;
+                    if (log != null) log.AppendLine("  " + path + "  usage " + caps.UsagePage.ToString("X4") + ":" + caps.Usage.ToString("X4"));
+                    string product = Hid.ProductString(h);
+
+                    using (HidChannel ch = new HidChannel(h, LongLen))
+                    {
+                        // Device connected directly (USB cable or Bluetooth): it answers at index 0xFF.
+                        if (Ping(ch, 0xFF, log) >= 2)
+                        {
+                            AddDevice(found, ch, 0xFF, Hid.IsBluetooth(path) ? "Bluetooth" : "USB cable", product, log);
+                            continue;
+                        }
+                        // Otherwise it is a receiver: ask each pairing slot.
+                        for (byte slot = 1; slot <= 6; slot++)
+                            if (Ping(ch, slot, log) >= 2)
+                                AddDevice(found, ch, slot, "2.4 GHz wireless receiver", "", log);
+                    }
+                }
+            }
+        }
+
+        static void AddDevice(List<Reading> found, HidChannel ch, byte dev, string connection, string product, StringBuilder log)
+        {
+            string name = "";
+            int type = -1;
+            byte fName = FeatureIndex(ch, dev, 0x0005, log);
+            if (fName != 0)
+            {
+                byte[] count = Request(ch, dev, fName, 0, null, log);
+                if (count != null)
+                {
+                    int len = count[4];
+                    List<byte> chars = new List<byte>();
+                    while (chars.Count < len)
+                    {
+                        byte[] part = Request(ch, dev, fName, 1, new byte[] { (byte)chars.Count }, log);
+                        if (part == null) break;
+                        int before = chars.Count;
+                        for (int i = 4; i < LongLen && chars.Count < len && part[i] != 0; i++) chars.Add(part[i]);
+                        if (chars.Count == before) break;
+                    }
+                    name = Encoding.UTF8.GetString(chars.ToArray()).Trim();
+                }
+                byte[] t = Request(ch, dev, fName, 2, null, log);
+                if (t != null) type = t[4];
+            }
+
+            // Device types: 3 mouse, 4 trackpad, 5 trackball. Keyboards, headsets etc. are ignored.
+            if (type >= 0 && type != 3 && type != 4 && type != 5)
+            {
+                if (log != null) log.AppendLine("    skipped: \"" + name + "\" is not a mouse (type " + type + ")");
+                return;
+            }
+
+            Reading r = ReadBattery(ch, dev, log);
+            if (r == null)
+            {
+                if (log != null) log.AppendLine("    skipped: \"" + name + "\" has no readable battery");
+                return;
+            }
+            if (name.Length == 0) name = product.Length > 0 ? product : "mouse";
+            r.Brand = "Logitech";
+            r.Name = name.StartsWith("Logitech", StringComparison.OrdinalIgnoreCase) ? name : "Logitech " + name;
+            r.Key = "logitech:" + r.Name;
+            r.Connection = connection;
+            foreach (Reading other in found)
+                if (other.Key == r.Key) return;   // same mouse seen twice (e.g. receiver + cable)
+            found.Add(r);
+        }
+
+        static Reading ReadBattery(HidChannel ch, byte dev, StringBuilder log)
+        {
+            Reading r = new Reading();
+            r.State = MouseState.Ok;
+
+            // 0x1004 Unified Battery: real state of charge.
+            byte f = FeatureIndex(ch, dev, 0x1004, log);
+            if (f != 0)
+            {
+                byte[] cap = Request(ch, dev, f, 0, null, log);
+                byte[] st = Request(ch, dev, f, 1, null, log);
+                if (st != null)
+                {
+                    bool socSupported = cap == null || (cap[5] & 0x02) != 0;
+                    r.Percent = socSupported && st[4] > 0 ? st[4] : LevelFromFlags(st[5]);
+                    r.Charging = st[6] >= 1 && st[6] <= 3;
+                    r.Full = st[6] == 3;
+                    if (r.Full) r.Percent = 100;
+                    return r;
+                }
+            }
+
+            // 0x1000 Battery Level Status.
+            f = FeatureIndex(ch, dev, 0x1000, log);
+            if (f != 0)
+            {
+                byte[] st = Request(ch, dev, f, 0, null, log);
+                if (st != null)
+                {
+                    r.Percent = Math.Min(100, (int)st[4]);
+                    r.Charging = st[6] >= 1 && st[6] <= 4;
+                    r.Full = st[6] == 3;
+                    if (r.Full) r.Percent = 100;
+                    return r;
+                }
+            }
+
+            // 0x1001 Battery Voltage: only a voltage, the percentage is estimated from it.
+            f = FeatureIndex(ch, dev, 0x1001, log);
+            if (f != 0)
+            {
+                byte[] st = Request(ch, dev, f, 0, null, log);
+                if (st != null)
+                {
+                    r.Millivolts = (st[4] << 8) | st[5];
+                    r.Charging = (st[6] & 0x80) != 0;
+                    r.Full = r.Charging && (st[6] & 0x03) == 1;
+                    r.Percent = r.Full ? 100 : PercentFromVoltage(r.Millivolts);
+                    r.VoltageBased = true;
+                    return r;
+                }
+            }
+            return null;
+        }
+
+        static int LevelFromFlags(int flags)
+        {
+            if ((flags & 0x08) != 0) return 100;   // full
+            if ((flags & 0x04) != 0) return 50;    // good
+            if ((flags & 0x02) != 0) return 20;    // low
+            if ((flags & 0x01) != 0) return 5;     // critical
+            return 0;
+        }
+
+        // Typical discharge curve of a single Li-ion cell (mV -> %), linearly interpolated.
+        static readonly int[,] Curve = {
+            { 4180, 100 }, { 4070, 90 }, { 3990, 80 }, { 3920, 70 }, { 3860, 60 }, { 3810, 50 },
+            { 3780, 40 }, { 3750, 30 }, { 3720, 20 }, { 3670, 10 }, { 3650, 5 }, { 3580, 2 }, { 3500, 0 } };
+
+        static int PercentFromVoltage(int mv)
+        {
+            if (mv >= Curve[0, 0]) return 100;
+            for (int i = 1; i < Curve.GetLength(0); i++)
+            {
+                if (mv >= Curve[i, 0])
+                {
+                    double t = (double)(mv - Curve[i, 0]) / (Curve[i - 1, 0] - Curve[i, 0]);
+                    return (int)Math.Round(Curve[i, 1] + t * (Curve[i - 1, 1] - Curve[i, 1]));
+                }
+            }
+            return 0;
+        }
+    }
+
+    static class Devices
+    {
+        public static List<Reading> ReadAll(StringBuilder log)
+        {
+            List<Reading> list = new List<Reading>();
+            try { PulsarDevices.Read(list, log); }
+            catch (Exception e) { if (log != null) log.AppendLine("Pulsar exception: " + e); }
+            try { LogitechDevices.Read(list, log); }
+            catch (Exception e) { if (log != null) log.AppendLine("Logitech exception: " + e); }
+            DateTime now = DateTime.Now;
+            foreach (Reading r in list) r.Time = now;
+            return list;
+        }
+    }
+
+    // What the app remembers about each mouse it has seen.
+    class DeviceTrack
+    {
+        public string Key = "", Name = "", Brand = "";
+        public Reading LastOk;        // last successful reading (time, voltage)
+        public Reading LastTrusted;   // last trustworthy percentage (not charging, not settling)
+        public bool WasCharging, LowAlerted;
+        public DateTime SettleUntil = DateTime.MinValue;
     }
 
     // ------------------------------------------------------------------
@@ -280,7 +589,7 @@ namespace PulsarBattery
     // ------------------------------------------------------------------
     static class Ui
     {
-        public const string MouseName = "Pulsar X2 V2 Mini";
+        public const string NoMouse = "No mouse detected";
 
         [DllImport("user32.dll")]
         static extern bool DestroyIcon(IntPtr h);
@@ -391,9 +700,7 @@ namespace PulsarBattery
     class DetailsForm : Form
     {
         public Reading Current = new Reading();
-        public Reading LastOk;        // last successful reading (time, voltage)
-        public Reading LastTrusted;   // last trustworthy percentage (not charging, not settling)
-        public DateTime SettleUntil = DateTime.MinValue;
+        public DeviceTrack Track;     // history of the displayed mouse (may be null)
         public DateTime HiddenAt = DateTime.MinValue;
 
         [DllImport("dwmapi.dll")]
@@ -440,13 +747,51 @@ namespace PulsarBattery
             info.Click += delegate { showInfo = !showInfo; Relayout(); };
         }
 
-        const string InfoTitle = "Why ~95% as soon as it's plugged in?";
-        const string InfoText =
-            "This comes from the Pulsar mouse, not from this app.\n\n" +
-            "The mouse estimates its battery from the voltage. When plugged in, the voltage rises " +
-            "and the reported level is overestimated.\n\n" +
-            "Once unplugged, it settles back to the real level within a few minutes. " +
-            "So the percentage is hidden while charging and for 5 min afterwards.";
+        string Brand
+        {
+            get
+            {
+                if (Current.Brand.Length > 0) return Current.Brand;
+                return Track != null ? Track.Brand : "";
+            }
+        }
+
+        string Title
+        {
+            get
+            {
+                if (Current.Name.Length > 0) return Current.Name;
+                return Track != null ? Track.Name : Ui.NoMouse;
+            }
+        }
+
+        // The explanation only applies to mice whose level is estimated from the voltage.
+        bool VoltageBased
+        {
+            get
+            {
+                if (Current.State == MouseState.Ok) return Current.VoltageBased;
+                return Track != null && Track.LastOk != null && Track.LastOk.VoltageBased;
+            }
+        }
+
+        string InfoTitle
+        {
+            get { return Brand == "Pulsar" ? "Why ~95% as soon as it's plugged in?" : "Why is the level hidden while charging?"; }
+        }
+
+        string InfoText
+        {
+            get
+            {
+                string mouse = Brand.Length > 0 ? "your " + Brand + " mouse" : "the mouse";
+                return "This comes from " + mouse + ", not from this app.\n\n" +
+                       "The mouse estimates its battery from the voltage. When plugged in, the voltage rises " +
+                       "and the reported level is overestimated.\n\n" +
+                       "Once unplugged, it settles back to the real level within a few minutes. " +
+                       "So the percentage is hidden while charging and for 5 min afterwards.";
+            }
+        }
 
         readonly Label info = new Label();
         bool showInfo;
@@ -485,16 +830,18 @@ namespace PulsarBattery
             Invalidate();
         }
 
-        // Size and position: the window has one extra row while charging (reported level).
+        // Size and position: the window has one extra row while charging (level).
         public void Relayout()
         {
             float s;
             using (Graphics g = CreateGraphics()) s = g.DpiX / 96f;
+            if (!VoltageBased) showInfo = false;
             bool tall = showInfo || (Current.State == MouseState.Ok && Current.Charging);
             Size = new Size((int)(310 * s), (int)((tall ? 262 : 237) * s));
             int isz = (int)(18 * s);
             info.SetBounds(Width - (int)(20 * s) - isz, (int)(14 * s), isz, isz);
             info.BackColor = Ui.IsDark() ? Color.FromArgb(32, 32, 32) : Color.FromArgb(249, 249, 249);
+            info.Visible = VoltageBased;
             Screen screen = Visible ? Screen.FromControl(this) : Screen.FromPoint(Cursor.Position);
             Rectangle wa = screen.WorkingArea;
             int right = wa.Right, bottom = wa.Bottom;
@@ -519,20 +866,25 @@ namespace PulsarBattery
             Invalidate();
         }
 
-        public void showInfoPreview() { showInfo = true; }
+        public void ShowInfoPreview() { showInfo = true; }
         public void PaintTo(Graphics g) { OnPaint(new PaintEventArgs(g, ClientRectangle)); }
+
+        bool Settling
+        {
+            get { return Current.State == MouseState.Ok && !Current.Charging && Track != null && Current.Time < Track.SettleUntil; }
+        }
 
         string StateText(Reading r)
         {
             switch (r.State)
             {
                 case MouseState.Ok:
-                    if (r.Charging) return r.Percent >= 100 ? "Charged (plugged in)" : "Charging";
-                    if (r.Time < SettleUntil) return "Settling after charge";
+                    if (r.Charging) return r.Full ? "Charged (plugged in)" : "Charging";
+                    if (Settling) return "Settling after charge";
                     return "On battery";
                 case MouseState.Asleep: return "Asleep or off";
                 case MouseState.Error: return "Read error";
-                default: return "Receiver not found";
+                default: return Track != null ? "Not detected" : "No mouse found";
             }
         }
 
@@ -554,10 +906,12 @@ namespace PulsarBattery
 
             bool ok = Current.State == MouseState.Ok;
             bool charging = ok && Current.Charging;
-            bool settling = ok && !Current.Charging && Current.Time < SettleUntil;
-            bool live = ok && !charging && !settling;          // percentage is trustworthy and current
-            Reading shown = live ? Current : LastTrusted;       // source of the displayed percentage
-            Reading volt = ok ? Current : LastOk;
+            bool settling = Settling;
+            bool live = ok && !charging && !settling;                       // percentage is trustworthy and current
+            Reading lastTrusted = Track != null ? Track.LastTrusted : null;
+            Reading lastOk = Track != null ? Track.LastOk : null;
+            Reading shown = live ? Current : lastTrusted;                   // source of the displayed percentage
+            Reading volt = ok ? Current : lastOk;
             float pad = 20 * s;
             float w = ClientSize.Width - 2 * pad;
 
@@ -567,11 +921,14 @@ namespace PulsarBattery
             using (Font fBig = new Font("Segoe UI Light", 32f))
             using (Font fRow = new Font("Segoe UI", 9.5f))
             using (StringFormat right = new StringFormat())
+            using (StringFormat titleFmt = new StringFormat())
             {
                 right.Alignment = StringAlignment.Far;
                 right.FormatFlags |= StringFormatFlags.NoWrap;
+                titleFmt.FormatFlags |= StringFormatFlags.NoWrap;
+                titleFmt.Trimming = StringTrimming.EllipsisCharacter;
 
-                g.DrawString(Ui.MouseName, fTitle, bFg, pad - 2 * s, 14 * s);
+                g.DrawString(Title, fTitle, bFg, new RectangleF(pad - 2 * s, 14 * s, w - 22 * s, 22 * s), titleFmt);
 
                 if (showInfo)
                 {
@@ -593,13 +950,13 @@ namespace PulsarBattery
 
                 if (charging)
                 {
-                    // Charging: the percentage sent by the mouse is overestimated, show a bolt instead.
-                    // When it reports 100% while plugged in, treat it as fully charged.
-                    bool full = Current.Percent >= 100;
+                    // Charging: show a bolt instead of the percentage (overestimated on voltage-based mice).
+                    bool full = Current.Full;
                     using (SolidBrush bb = new SolidBrush(full ? Ui.LevelColor(100, false) : Ui.ChargeBlue))
                     {
                         g.FillPolygon(bb, Ui.Bolt(new RectangleF(pad, 44 * s, 24 * s, 40 * s)));
-                        using (GraphicsPath pf = Ui.RoundRect(bar, 4 * s)) g.FillPath(bb, pf);
+                        float fw = Current.VoltageBased || full ? w : Math.Max(8 * s, w * Current.Percent / 100f);
+                        using (GraphicsPath pf = Ui.RoundRect(new RectangleF(pad, 100 * s, fw, 8 * s), 4 * s)) g.FillPath(bb, pf);
                     }
                     using (Font fMid = new Font("Segoe UI Light", 22f))
                         g.DrawString(full ? "Charged" : "Charging", fMid, bFg, pad + 28 * s, 44 * s);
@@ -608,7 +965,7 @@ namespace PulsarBattery
                 {
                     using (Font fMid = new Font("Segoe UI Light", 22f))
                         g.DrawString("Settling…", fMid, bSub, pad - 6 * s, 44 * s);
-                    int min = Math.Max(1, (int)Math.Ceiling((SettleUntil - DateTime.Now).TotalMinutes));
+                    int min = Math.Max(1, (int)Math.Ceiling((Track.SettleUntil - DateTime.Now).TotalMinutes));
                     g.DrawString("~" + min + " min left", fRow, bSub, new RectangleF(pad, 64 * s, w, 20 * s), right);
                 }
                 else
@@ -627,13 +984,16 @@ namespace PulsarBattery
                     }
                 }
 
+                string level = (Current.VoltageBased && !Current.Full ? "≈ " : "") + Current.Percent + "%";
+                string connection = Current.Connection.Length > 0 ? Current.Connection
+                                  : (lastOk != null && Current.State != MouseState.NoDevice ? lastOk.Connection : "—");
                 string[][] rows = new string[][] {
                     new string[] { "Status", StateText(Current) },
                     new string[] { "Voltage", volt != null && volt.Millivolts > 0 ? (volt.Millivolts / 1000.0).ToString("0.00") + " V" : "—" },
-                    new string[] { "Connection", Device.ConnectionName(Current.State == MouseState.NoDevice ? 0 : Current.ProductId) },
-                    // Row shown only while charging: level reported by the mouse (approximate).
-                    new string[] { charging ? "Reported level" : null, (Current.Percent >= 100 ? "" : "≈ ") + Current.Percent + "%" },
-                    new string[] { "Last reading", LastOk != null ? LastOk.Time.ToString("HH:mm:ss") : "—" },
+                    new string[] { "Connection", connection },
+                    // Row shown only while charging: level reported by the mouse.
+                    new string[] { charging ? (Current.VoltageBased ? "Reported level" : "Level") : null, level },
+                    new string[] { "Last reading", lastOk != null ? lastOk.Time.ToString("HH:mm:ss") : "—" },
                 };
                 float y = 124 * s;
                 foreach (string[] row in rows)
@@ -653,22 +1013,22 @@ namespace PulsarBattery
     class TrayContext : ApplicationContext
     {
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-        const string RunName = "PulsarBatteryTray";
-        const string SettingsKey = @"Software\PulsarBatteryTray";
+        const string RunName = "MouseBatteryTray";
+        const string SettingsKey = @"Software\MouseBatteryTray";
         const int LowLevel = 15;
+        const int SettleMinutes = 5;
 
         readonly NotifyIcon tray = new NotifyIcon();
         readonly DetailsForm details = new DetailsForm();
         readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         readonly TaskScheduler ui;
-        readonly ToolStripMenuItem itemHeader, itemStartup, itemAlert;
+        readonly ToolStripMenuItem itemHeader, itemDevices, itemStartup, itemAlert;
 
+        readonly List<DeviceTrack> tracks = new List<DeviceTrack>();
+        List<Reading> lastReadings = new List<Reading>();
+        string selectedKey;          // "" = automatic
+        string autoKey = "";         // mouse shown last in automatic mode
         bool busy;
-        bool lowAlerted;
-        const int SettleMinutes = 5;
-        Reading lastOk, lastTrusted;
-        bool wasCharging;
-        DateTime settleUntil = DateTime.MinValue;
         Icon currentIcon;
 
         public TrayContext()
@@ -676,10 +1036,12 @@ namespace PulsarBattery
             if (SynchronizationContext.Current == null)
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
             ui = TaskScheduler.FromCurrentSynchronizationContext();
+            selectedKey = GetSetting("SelectedDevice", "");
 
             ContextMenuStrip menu = new ContextMenuStrip();
-            itemHeader = new ToolStripMenuItem(Ui.MouseName);
+            itemHeader = new ToolStripMenuItem(Ui.NoMouse);
             itemHeader.Enabled = false;
+            itemDevices = new ToolStripMenuItem("Mouse to display");
             itemStartup = new ToolStripMenuItem("Start with Windows");
             itemStartup.Click += delegate { ToggleStartup(); };
             itemAlert = new ToolStripMenuItem("Low battery alert (" + LowLevel + "%)");
@@ -688,6 +1050,7 @@ namespace PulsarBattery
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("Show details", null, delegate { ShowDetails(); });
             menu.Items.Add("Refresh", null, delegate { RefreshNow(); });
+            menu.Items.Add(itemDevices);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(itemStartup);
             menu.Items.Add(itemAlert);
@@ -697,6 +1060,7 @@ namespace PulsarBattery
             {
                 itemStartup.Checked = StartupEnabled();
                 itemAlert.Checked = AlertEnabled();
+                FillDeviceMenu();
             };
 
             tray.ContextMenuStrip = menu;
@@ -708,13 +1072,40 @@ namespace PulsarBattery
                 if ((DateTime.UtcNow - details.HiddenAt).TotalMilliseconds < 300) return;
                 ShowDetails();
             };
-            Apply(new Reading());
+            Apply(new List<Reading>());
             tray.Visible = true;
 
             timer.Interval = 60000;
             timer.Tick += delegate { RefreshNow(); };
             timer.Start();
             RefreshNow();
+        }
+
+        // "Mouse to display" submenu: automatic, or one of the mice seen since the app started.
+        void FillDeviceMenu()
+        {
+            itemDevices.DropDownItems.Clear();
+            ToolStripMenuItem auto = new ToolStripMenuItem("Automatic");
+            auto.Checked = selectedKey.Length == 0;
+            auto.Click += delegate { Select(""); };
+            itemDevices.DropDownItems.Add(auto);
+            if (tracks.Count > 0) itemDevices.DropDownItems.Add(new ToolStripSeparator());
+            foreach (DeviceTrack t in tracks)
+            {
+                string key = t.Key;
+                ToolStripMenuItem it = new ToolStripMenuItem(t.Name);
+                it.Checked = selectedKey == key;
+                it.Click += delegate { Select(key); };
+                itemDevices.DropDownItems.Add(it);
+            }
+            itemDevices.Visible = tracks.Count > 1 || selectedKey.Length > 0;
+        }
+
+        void Select(string key)
+        {
+            selectedKey = key;
+            SetSetting("SelectedDevice", key);
+            Apply(lastReadings);
         }
 
         void ShowDetails()
@@ -727,77 +1118,143 @@ namespace PulsarBattery
         {
             if (busy) return;
             busy = true;
-            Task.Factory.StartNew<Reading>(delegate { return Device.Read(null); })
-                .ContinueWith(delegate(Task<Reading> t)
+            Task.Factory.StartNew<List<Reading>>(delegate { return Devices.ReadAll(null); })
+                .ContinueWith(delegate(Task<List<Reading>> t)
                 {
                     busy = false;
-                    Reading r;
-                    if (t.IsFaulted)
-                    {
-                        r = new Reading();
-                        r.State = MouseState.Error;
-                        r.Error = t.Exception.GetBaseException().Message;
-                    }
-                    else r = t.Result;
-                    Apply(r);
+                    Apply(t.IsFaulted ? new List<Reading>() : t.Result);
                 }, ui);
         }
 
-        void Apply(Reading r)
+        DeviceTrack FindTrack(string key)
         {
-            // While charging, the mouse overestimates its level; after unplugging, the value takes a few
-            // minutes to settle. The percentage is not shown during these two phases.
-            bool settling = false;
-            if (r.State == MouseState.Ok)
+            foreach (DeviceTrack t in tracks) if (t.Key == key) return t;
+            return null;
+        }
+
+        bool IsSettling(DeviceTrack t, Reading r)
+        {
+            return t != null && r.State == MouseState.Ok && !r.Charging && r.Time < t.SettleUntil;
+        }
+
+        // Updates the history of one mouse and raises its low battery alert.
+        void Update(Reading r)
+        {
+            DeviceTrack t = FindTrack(r.Key);
+            if (t == null)
             {
-                lastOk = r;
-                if (r.Charging) wasCharging = true;
-                else
-                {
-                    if (wasCharging) { wasCharging = false; settleUntil = r.Time.AddMinutes(SettleMinutes); }
-                    settling = r.Time < settleUntil;
-                    if (!settling) lastTrusted = r;
-                }
+                t = new DeviceTrack();
+                t.Key = r.Key;
+                tracks.Add(t);
             }
+            t.Name = r.Name;
+            t.Brand = r.Brand;
+            if (r.State != MouseState.Ok) return;
+
+            // While charging, voltage-based mice overestimate their level; after unplugging the value takes
+            // a few minutes to settle. The percentage is not shown during these two phases.
+            t.LastOk = r;
+            if (r.Charging) t.WasCharging = true;
+            else
+            {
+                if (t.WasCharging)
+                {
+                    t.WasCharging = false;
+                    if (r.VoltageBased) t.SettleUntil = r.Time.AddMinutes(SettleMinutes);
+                }
+                if (!IsSettling(t, r)) t.LastTrusted = r;
+            }
+
+            if (IsSettling(t, r)) return;
+            if (r.Charging || r.Percent > LowLevel + 5) t.LowAlerted = false;
+            else if (r.Percent <= LowLevel && !t.LowAlerted && AlertEnabled())
+            {
+                t.LowAlerted = true;
+                tray.ShowBalloonTip(8000, "Mouse battery low",
+                    r.Name + ": " + r.Percent + "% left. Time to plug it in.", ToolTipIcon.Warning);
+            }
+        }
+
+        // Chooses the mouse shown by the icon: the selected one, or in automatic mode the one shown before
+        // if it is still there, otherwise the first mouse that answers.
+        Reading Pick(List<Reading> readings, out DeviceTrack track)
+        {
+            string key = selectedKey.Length > 0 ? selectedKey : autoKey;
+            Reading pick = null;
+            foreach (Reading r in readings)
+                if (r.Key == key && (selectedKey.Length > 0 || r.State == MouseState.Ok)) pick = r;
+            if (pick == null && selectedKey.Length == 0)
+            {
+                foreach (Reading r in readings) if (pick == null && r.State == MouseState.Ok) pick = r;
+                if (pick == null && readings.Count > 0) pick = readings[0];
+            }
+            if (pick != null)
+            {
+                if (selectedKey.Length == 0) autoKey = pick.Key;
+                track = FindTrack(pick.Key);
+                return pick;
+            }
+            // The mouse is gone: keep showing it as not detected, with its last known level.
+            track = FindTrack(key);
+            Reading none = new Reading();
+            if (track != null)
+            {
+                none.Key = track.Key;
+                none.Name = track.Name;
+                none.Brand = track.Brand;
+            }
+            return none;
+        }
+
+        void Apply(List<Reading> readings)
+        {
+            lastReadings = readings;
+            foreach (Reading r in readings) Update(r);
+
+            DeviceTrack t;
+            Reading r0 = Pick(readings, out t);
+            bool settling = IsSettling(t, r0);
+            string name = r0.Name.Length > 0 ? r0.Name : Ui.NoMouse;
+            Reading lastTrusted = t != null ? t.LastTrusted : null;
 
             string tip;
             int level = 0;
             IconMode mode;
-            if (r.State == MouseState.Ok && r.Charging && r.Percent >= 100)
+            if (r0.State == MouseState.Ok && r0.Charging && r0.Full)
             {
                 mode = IconMode.Normal;
                 level = 100;
-                tip = Ui.MouseName + ": charged (100%)";
+                tip = name + ": charged (100%)";
             }
-            else if (r.State == MouseState.Ok && r.Charging)
+            else if (r0.State == MouseState.Ok && r0.Charging)
             {
                 mode = IconMode.Charging;
-                tip = Ui.MouseName + ": charging";
+                tip = name + ": charging" + (r0.VoltageBased ? "" : " (" + r0.Percent + "%)");
             }
             else if (settling)
             {
                 mode = IconMode.Dim;
-                level = r.Percent;
-                tip = Ui.MouseName + ": settling after charge";
+                level = r0.Percent;
+                tip = name + ": settling after charge";
             }
-            else if (r.State == MouseState.Ok)
+            else if (r0.State == MouseState.Ok)
             {
                 mode = IconMode.Normal;
-                level = r.Percent;
-                tip = Ui.MouseName + ": " + r.Percent + "%";
+                level = r0.Percent;
+                tip = name + ": " + r0.Percent + "%";
             }
             else if (lastTrusted != null)
             {
                 mode = IconMode.Dim;
                 level = lastTrusted.Percent;
-                tip = Ui.MouseName + ": " + (r.State == MouseState.Asleep ? "asleep" : "not detected") + " (" + lastTrusted.Percent + "%)";
+                tip = name + ": " + (r0.State == MouseState.Asleep ? "asleep" : "not detected") + " (" + lastTrusted.Percent + "%)";
             }
             else
             {
                 mode = IconMode.Empty;
-                tip = r.State == MouseState.Asleep ? Ui.MouseName + ": asleep or off"
-                    : r.State == MouseState.Error ? "Pulsar: read error"
-                    : "Pulsar: receiver not found";
+                tip = r0.State == MouseState.Asleep ? name + ": asleep or off"
+                    : t != null ? name + ": not detected"
+                    : Ui.NoMouse;
             }
 
             Icon old = currentIcon;
@@ -807,21 +1264,8 @@ namespace PulsarBattery
             tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
             itemHeader.Text = tip;
 
-            if (r.State == MouseState.Ok && !settling)
-            {
-                if (r.Charging || r.Percent > LowLevel + 5) lowAlerted = false;
-                else if (r.Percent <= LowLevel && !lowAlerted && AlertEnabled())
-                {
-                    lowAlerted = true;
-                    tray.ShowBalloonTip(8000, "Mouse battery low",
-                        Ui.MouseName + ": " + r.Percent + "% left. Time to plug it in.", ToolTipIcon.Warning);
-                }
-            }
-
-            details.Current = r;
-            details.LastOk = lastOk;
-            details.LastTrusted = lastTrusted;
-            details.SettleUntil = settleUntil;
+            details.Current = r0;
+            details.Track = t;
             if (details.Visible) details.Relayout();
         }
 
@@ -912,18 +1356,22 @@ namespace PulsarBattery
         [STAThread]
         static int Main(string[] args)
         {
-            // Diagnostic mode: PulsarBattery.exe --once [file] writes a detailed reading, then exits.
+            // Diagnostic mode: MouseBatteryTray.exe --once [file] writes a detailed reading, then exits.
             if (args.Length > 0 && args[0] == "--once")
             {
                 StringBuilder log = new StringBuilder();
-                Reading r = Device.Read(log);
-                log.AppendLine("Result: " + r.State + " | " + r.Percent + "% | charging=" + r.Charging + " | " + r.Millivolts + " mV | PID " + r.ProductId.ToString("X4") + (r.Error != null ? " | " + r.Error : ""));
+                List<Reading> list = Devices.ReadAll(log);
+                log.AppendLine();
+                log.AppendLine(list.Count + " mouse/mice found");
+                foreach (Reading r in list)
+                    log.AppendLine("Result: " + r.Name + " | " + r.State + " | " + r.Percent + "% | charging=" + r.Charging +
+                                   " | full=" + r.Full + " | " + r.Millivolts + " mV | " + r.Connection + (r.VoltageBased ? " | voltage-based" : ""));
                 if (args.Length > 1) File.WriteAllText(args[1], log.ToString(), Encoding.UTF8);
                 else Console.Write(log.ToString());
-                return r.State == MouseState.Ok ? 0 : 1;
+                return list.Count > 0 ? 0 : 1;
             }
 
-            // Preview mode: PulsarBattery.exe --preview file.png draws the icons and the window into an image.
+            // Preview mode: MouseBatteryTray.exe --preview file.png draws the icons and the window into an image.
             if (args.Length > 1 && args[0] == "--preview")
             {
                 using (Bitmap sheet = new Bitmap(760, 560))
@@ -955,8 +1403,10 @@ namespace PulsarBattery
                             }
                         }
                         Reading[] states = new Reading[2];
-                        states[0] = new Reading(); states[0].State = MouseState.Ok; states[0].Percent = 95; states[0].Charging = true; states[0].Millivolts = 4059; states[0].ProductId = 0xF507;
-                        states[1] = new Reading(); states[1].State = MouseState.Ok; states[1].Percent = 88; states[1].Millivolts = 3990; states[1].ProductId = 0xF508;
+                        states[0] = new Reading(); states[0].State = MouseState.Ok; states[0].Percent = 95; states[0].Charging = true; states[0].Millivolts = 4059;
+                        states[0].Brand = "Pulsar"; states[0].Name = "Pulsar X2 V2 Mini"; states[0].Connection = "USB cable"; states[0].VoltageBased = true;
+                        states[1] = new Reading(); states[1].State = MouseState.Ok; states[1].Percent = 72;
+                        states[1].Brand = "Logitech"; states[1].Name = "Logitech PRO X SUPERLIGHT"; states[1].Connection = "2.4 GHz wireless receiver";
                         for (int i = 0; i < 2; i++)
                         {
                             using (DetailsForm f = new DetailsForm())
@@ -964,8 +1414,10 @@ namespace PulsarBattery
                             {
                                 f.ClientSize = new Size(310, 262);
                                 f.Current = states[i];
-                                f.LastOk = states[i];
-                                if (i == 1) f.showInfoPreview();
+                                DeviceTrack t = new DeviceTrack();
+                                t.LastOk = states[i];
+                                t.LastTrusted = states[i];
+                                f.Track = t;
                                 using (Graphics fg = Graphics.FromImage(bm)) f.PaintTo(fg);
                                 g.DrawImage(bm, 10 + i * 330, 280);
                             }
@@ -977,7 +1429,7 @@ namespace PulsarBattery
             }
 
             bool created;
-            using (Mutex mutex = new Mutex(true, "PulsarBatteryTray_SingleInstance", out created))
+            using (Mutex mutex = new Mutex(true, "MouseBatteryTray_SingleInstance", out created))
             {
                 if (!created) return 0;
                 try { SetProcessDPIAware(); } catch { }

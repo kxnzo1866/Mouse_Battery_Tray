@@ -1,14 +1,17 @@
-﻿; Pulsar Battery Tray installer (Inno Setup 6 - https://jrsoftware.org/isinfo.php)
+﻿; Mouse Battery Tray installer (Inno Setup 6 - https://jrsoftware.org/isinfo.php)
 ; Build: .\build.ps1 -Setup   (or open this file in Inno Setup and click Compile)
-; The version number must also be updated at the top of PulsarBattery.cs.
+; The version number must also be updated at the top of MouseBatteryTray.cs.
 
-#define AppName "Pulsar Battery Tray"
-#define AppVersion "1.0.0"
-#define AppExe "PulsarBattery.exe"
-#define RunValue "PulsarBatteryTray"
+#define AppName "Mouse Battery Tray"
+#define AppVersion "1.1.0"
+#define AppExe "MouseBatteryTray.exe"
+#define RunValue "MouseBatteryTray"
+; Versions up to 1.0.0 were named "Pulsar Battery Tray": they are uninstalled automatically.
+#define OldAppId "{6E0B5C3A-7B0D-4E53-9F0C-2B6C1A4D8E71}"
+#define OldExe "PulsarBattery.exe"
 
 [Setup]
-AppId={{6E0B5C3A-7B0D-4E53-9F0C-2B6C1A4D8E71}
+AppId={{F3477553-85CB-47BC-8BBF-E7B255F3805A}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -25,7 +28,7 @@ UninstallDisplayIcon={app}\{#AppExe}
 SetupIconFile=..\app.ico
 LicenseFile=..\LICENSE
 OutputDir=..\dist
-OutputBaseFilename=PulsarBatteryTray-Setup-{#AppVersion}
+OutputBaseFilename=MouseBatteryTray-Setup-{#AppVersion}
 WizardStyle=modern
 Compression=lzma2
 SolidCompression=yes
@@ -56,7 +59,7 @@ english.LaunchNow=Start {#AppName} now
 Name: "startup"; Description: "{cm:StartupTask}"; Check: not IsPortable
 
 [Files]
-Source: "..\PulsarBattery.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\{#AppExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\LICENSE"; DestDir: "{app}"; DestName: "LICENSE.txt"; Flags: ignoreversion
 
 [Icons]
@@ -65,7 +68,7 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Check: not IsPor
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\{#AppExe}"""; Tasks: startup; Flags: uninsdeletevalue
 ; App settings (low battery alert): removed on uninstall.
-Root: HKCU; Subkey: "Software\PulsarBatteryTray"; Flags: uninsdeletekey dontcreatekey; Check: not IsPortable
+Root: HKCU; Subkey: "Software\MouseBatteryTray"; Flags: uninsdeletekey dontcreatekey; Check: not IsPortable
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
@@ -102,18 +105,24 @@ begin
   if CurPageID = ModePage.ID then
   begin
     if IsPortable then
-      WizardForm.DirEdit.Text := ExpandConstant('{userdesktop}\PulsarBatteryTray')
+      WizardForm.DirEdit.Text := ExpandConstant('{userdesktop}\MouseBatteryTray')
     else
       WizardForm.DirEdit.Text := ExpandConstant('{autopf}\{#AppName}');
   end;
 end;
 
-// Closes a running copy so the exe can be replaced.
+// Closes a running copy (current or old name) so the exe can be replaced,
+// then silently uninstalls a previous "Pulsar Battery Tray" installation.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
+  OldUninstaller: String;
 begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#OldExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if RegQueryStringValue(HKEY_CURRENT_USER,
+       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#OldAppId}_is1', 'UninstallString', OldUninstaller) then
+    Exec(RemoveQuotes(OldUninstaller), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
   Result := '';
 end;
 
@@ -128,7 +137,7 @@ begin
     begin
       // The presence of this file switches the app to portable mode.
       if not FileExists(Marker) then
-        SaveStringToFile(Marker, '; Pulsar Battery Tray - portable mode' + #13#10 + 'LowBatteryAlert=1' + #13#10, False);
+        SaveStringToFile(Marker, '; Mouse Battery Tray - portable mode' + #13#10 + 'LowBatteryAlert=1' + #13#10, False);
     end
     else
     begin
