@@ -1,9 +1,10 @@
 ﻿; Mouse Battery Tray installer (Inno Setup 6 - https://jrsoftware.org/isinfo.php)
 ; Build: .\build.ps1 -Setup   (or open this file in Inno Setup and click Compile)
-; The version number must also be updated at the top of MouseBatteryTray.cs.
+; The version number must also be updated at the top of src\MouseBatteryTray.cs.
+; Silent install for testing: /VERYSILENT /LANG=french|english /DIR="..." and /PORTABLE=1 for the portable mode.
 
 #define AppName "Mouse Battery Tray"
-#define AppVersion "1.1.0"
+#define AppVersion "1.3.0"
 #define AppExe "MouseBatteryTray.exe"
 #define RunValue "MouseBatteryTray"
 ; Versions up to 1.0.0 were named "Pulsar Battery Tray": they are uninstalled automatically.
@@ -67,8 +68,10 @@ Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"; Check: not IsPor
 
 [Registry]
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#RunValue}"; ValueData: """{app}\{#AppExe}"""; Tasks: startup; Flags: uninsdeletevalue
-; App settings (low battery alert): removed on uninstall.
+; App settings (language, theme, alert, ...): removed on uninstall.
 Root: HKCU; Subkey: "Software\MouseBatteryTray"; Flags: uninsdeletekey dontcreatekey; Check: not IsPortable
+; Language of the app on first launch = language chosen in the installer (kept if the user already changed it).
+Root: HKCU; Subkey: "Software\MouseBatteryTray"; ValueType: string; ValueName: "Language"; ValueData: "{code:AppLanguage}"; Flags: createvalueifdoesntexist uninsdeletekey; Check: not IsPortable
 
 [Run]
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchNow}"; Flags: nowait postinstall skipifsilent
@@ -89,6 +92,15 @@ begin
   Result := (ModePage <> nil) and (ModePage.SelectedValueIndex = 1);
 end;
 
+// Language code read by the app: "fr" or "en".
+function AppLanguage(Param: String): String;
+begin
+  if ActiveLanguage = 'french' then
+    Result := 'fr'
+  else
+    Result := 'en';
+end;
+
 procedure InitializeWizard;
 begin
   ModePage := CreateInputOptionPage(wpLicense,
@@ -96,13 +108,15 @@ begin
   ModePage.Add(CustomMessage('ModeNormal'));
   ModePage.Add(CustomMessage('ModePortable'));
   ModePage.SelectedValueIndex := 0;
+  if ExpandConstant('{param:PORTABLE|0}') = '1' then
+    ModePage.SelectedValueIndex := 1;
 end;
 
-// Suggests a folder suited to the chosen type.
+// Suggests a folder suited to the chosen type (unless a folder was given with /DIR=).
 function NextButtonClick(CurPageID: Integer): Boolean;
 begin
   Result := True;
-  if CurPageID = ModePage.ID then
+  if (CurPageID = ModePage.ID) and (ExpandConstant('{param:DIR|}') = '') then
   begin
     if IsPortable then
       WizardForm.DirEdit.Text := ExpandConstant('{userdesktop}\MouseBatteryTray')
@@ -111,18 +125,21 @@ begin
   end;
 end;
 
-// Closes a running copy (current or old name) so the exe can be replaced,
-// then silently uninstalls a previous "Pulsar Battery Tray" installation.
+// Closes a running copy so the exe can be replaced. A standard installation also closes and
+// silently uninstalls a previous "Pulsar Battery Tray" (a portable copy leaves installed versions alone).
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;
   OldUninstaller: String;
 begin
   Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#OldExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
-  if RegQueryStringValue(HKEY_CURRENT_USER,
-       'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#OldAppId}_is1', 'UninstallString', OldUninstaller) then
-    Exec(RemoveQuotes(OldUninstaller), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if not IsPortable then
+  begin
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#OldExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    if RegQueryStringValue(HKEY_CURRENT_USER,
+         'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#OldAppId}_is1', 'UninstallString', OldUninstaller) then
+      Exec(RemoveQuotes(OldUninstaller), '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  end;
   Result := '';
 end;
 
@@ -135,9 +152,11 @@ begin
     Marker := ExpandConstant('{app}\portable.ini');
     if IsPortable then
     begin
-      // The presence of this file switches the app to portable mode.
+      // The presence of this file switches the app to portable mode. It also holds all the settings,
+      // starting with the language chosen in the installer.
       if not FileExists(Marker) then
-        SaveStringToFile(Marker, '; Mouse Battery Tray - portable mode' + #13#10 + 'LowBatteryAlert=1' + #13#10, False);
+        SaveStringToFile(Marker, '; Mouse Battery Tray - portable mode' + #13#10 +
+          'Language=' + AppLanguage('') + #13#10 + 'LowBatteryAlert=1' + #13#10, False);
     end
     else
     begin

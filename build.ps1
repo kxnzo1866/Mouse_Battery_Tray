@@ -1,12 +1,12 @@
-# Builds MouseBatteryTray.exe from MouseBatteryTray.cs (uses the compiler that ships with Windows, nothing to install).
+# Builds MouseBatteryTray.exe from the source files in src\ (uses the compiler that ships with Windows, nothing to install).
 # With -Setup, also builds the installer into dist\ (requires Inno Setup 6: https://jrsoftware.org/isinfo.php).
 param([switch]$Setup)
 
 $csc = "$env:WINDIR\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
 & $csc /nologo /codepage:65001 /optimize+ /target:winexe /out:"$PSScriptRoot\MouseBatteryTray.exe" `
     /win32icon:"$PSScriptRoot\app.ico" `
-    /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll `
-    "$PSScriptRoot\MouseBatteryTray.cs"
+    /r:System.dll /r:System.Core.dll /r:System.Drawing.dll /r:System.Windows.Forms.dll /r:System.Web.Extensions.dll `
+    "$PSScriptRoot\src\*.cs"
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 "OK: MouseBatteryTray.exe"
 

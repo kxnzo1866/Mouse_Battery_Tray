@@ -11,11 +11,34 @@ Shows the battery level of a wireless **Pulsar** or **Logitech** mouse in the Wi
 ## Features
 
 - **Battery-shaped icon** that fills according to the level: green, then orange, then red. It turns blue with a lightning bolt while charging.
-- **Left click**: details window (mouse name, percentage, status, voltage, connection type, time of the last reading).
-- **Right click**: refresh, start with Windows, low battery alert (15%), exit.
-- **Several mice**: the icon shows the first mouse that answers; when more than one is detected, pick the one to display from the right-click menu ("Mouse to display"). The low battery alert works for every detected mouse.
-- Reads the mouse every 60 seconds and follows the Windows light or dark theme.
+- **Left click**: details window (mouse name, percentage, status, voltage, connection type, time of the last reading). The gear in its top-right corner opens the settings.
+- **Right click**: show details, refresh, mouse to display, settings, start with Windows, low battery alert, exit.
+- **Several mice**: the icon shows the first mouse that answers; when more than one is detected, pick the one to display from the right-click menu or the settings. The low battery alert works for every detected mouse.
+- **English and French**, **light, dark or system theme** (see [Settings](#settings)).
 - A single `.exe`, nothing else to install on Windows 10 and 11.
+
+## Settings
+
+Open them with the gear of the details window, or with **Settings…** in the right-click menu. It is a normal window with its own taskbar button; closing it does not stop the app. Every change applies at once:
+
+| Setting | Choices |
+| --- | --- |
+| Language | Français / English. On first launch the app uses the language chosen in the installer, otherwise the Windows language (English by default). |
+| Theme | System (follows Windows), Light, Dark. Applies to the details window, the settings window (title bar included) and the right-click menu. |
+| Start with Windows | On / off |
+| Low battery alert | On / off, and the threshold (5% to 50%, 15% by default) |
+| Mouse to display | Automatic, or one of the detected mice (when several are detected) |
+| Read the mouse every | 30 s, 1, 2, 5 or 10 min (1 min by default) |
+
+The settings window also has a **Refresh now** button and an **About** section (version, GitHub page, license, and why the level is off while charging).
+
+### Updates
+
+The **Updates** section shows the current version. **Check for updates** reads the latest release published on this GitHub page (pre-releases are ignored). When a newer version exists, **Install** downloads its installer, checks its SHA-256 fingerprint published by GitHub, closes the app and opens the installer in the app's language. A portable copy is updated in its own folder, a standard installation in its installation folder. Nothing is downloaded or installed without a click and a confirmation.
+
+For this to work, each release must have the installer (`MouseBatteryTray-Setup-x.y.z.exe`) attached and a tag like `v1.3.0`.
+
+The right-click menu and the settings window stay in sync. Settings are stored in `HKCU\Software\MouseBatteryTray` (standard installation) or in `portable.ini` next to the exe (portable version). In portable mode nothing is written to the registry: "Start with Windows" then uses a shortcut in your Startup folder.
 
 ## Installation
 
@@ -25,7 +48,7 @@ Shows the battery level of a wireless **Pulsar** or **Logitech** mouse in the Wi
    - **Portable**: plain copy to the folder of your choice. Settings are kept in a `portable.ini` file next to the exe and nothing is written to the registry.
 3. The icon appears next to the clock. If it is hidden behind the `^` arrow, drag it onto the taskbar.
 
-The installer does not require administrator rights. It is available in English and French.
+The installer does not require administrator rights. It is available in English and French, and the app starts in the language you picked in the installer.
 
 ### "Windows protected your PC" warning
 
@@ -86,7 +109,16 @@ To also build the installer (into `dist\`), install [Inno Setup 6](https://jrsof
 
 | File | Purpose |
 | --- | --- |
-| `MouseBatteryTray.cs` | All of the application code |
+| `src/MouseBatteryTray.cs` | Mouse detection, Pulsar and Logitech HID++ protocols |
+| `src/TrayContext.cs` | Notification area icon, right-click menu, readings |
+| `src/DetailsForm.cs` | Details window |
+| `src/SettingsForm.cs` | Settings window |
+| `src/Settings.cs` | Settings storage (registry or `portable.ini`) |
+| `src/Updater.cs` | Update check and download from GitHub Releases |
+| `src/Lang.cs` | All the texts, in English and French |
+| `src/Theme.cs` | Light / dark theme |
+| `src/Ui.cs` | Tray icon and gear drawing |
+| `src/Program.cs` | Entry point, diagnostic and preview modes |
 | `build.ps1` | Builds the exe and the installer |
 | `installer/setup.iss` | Installer script |
 | `tools/make-icon.ps1` | Generates `app.ico` |
