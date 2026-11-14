@@ -170,7 +170,8 @@ namespace MouseBatteryTray
         // Command line given to the installer: same language as the app, and the folder of the current copy.
         public static string InstallerArguments()
         {
-            string args = "/LANG=" + (Lang.Code == "fr" ? "french" : "english");
+            // /UPDATE=1: the installer waits for the app to close by itself (see InitializeSetup in setup.iss).
+            string args = "/UPDATE=1 /LANG=" + (Lang.Code == "fr" ? "french" : "english");
             if (AppSettings.IsPortable)
                 return args + " /PORTABLE=1 /DIR=\"" + Path.GetDirectoryName(Application.ExecutablePath) + "\"";
             string installed = InstalledDir();

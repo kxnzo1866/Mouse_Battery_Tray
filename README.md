@@ -29,8 +29,21 @@ Open them with the gear of the details window, or with **Settings…** in the ri
 | Low battery alert | On / off, and the threshold (5% to 50%, 15% by default) |
 | Mouse to display | Automatic, or one of the detected mice (when several are detected) |
 | Read the mouse every | 30 s, 1, 2, 5 or 10 min (1 min by default) |
+| Read less often while the level does not change | On by default (see [When the mouse is read](#when-the-mouse-is-read)) |
+| Write a diagnostic log | Off by default (see [Reporting a problem](#reporting-a-problem)) |
 
 The settings window also has a **Refresh now** button and an **About** section (version, GitHub page, license, and why the level is off while charging).
+
+### When the mouse is read
+
+- At the interval chosen in the settings.
+- **Every 30 s while charging**, to follow the charge.
+- **Less often while nothing changes** (option on by default): after 3 identical readings the interval doubles, after 6 it is multiplied by 4, up to 15 min. It goes back to normal as soon as the level moves by 2% or more, the mouse is plugged in or out, falls asleep, or gets close to the low battery threshold.
+- **Right away after an event**, without waiting: the PC wakes up from sleep, the session is unlocked, or a Pulsar / Logitech receiver, cable or Bluetooth mouse is connected or disconnected.
+
+The settings window shows the time of the last reading and of the next one.
+
+Only one copy of the app runs at a time: launching it again opens the settings window of the running copy.
 
 ### Updates
 
@@ -93,6 +106,13 @@ Attach the output of the diagnostic mode to your report. In PowerShell, from the
 
 The `diag.txt` file lists the detected interfaces and the exchanges with the mouse. It contains no personal information.
 
+For a problem that comes and goes, turn on **Write a diagnostic log** in the settings instead: every reading is then recorded with the same details, along with the app events (wake from sleep, device plugged in or out, time of the next reading). **Open the folder** shows the log files:
+
+- standard installation: `%LOCALAPPDATA%\MouseBatteryTray\logs`
+- portable version: `logs` folder next to the exe
+
+The log is limited to 3 files of 1 MB (`MouseBatteryTray.log`, `.1.log`, `.2.log`); the oldest is deleted automatically.
+
 ## Building from source
 
 No tools are needed for the exe: the script uses the C# compiler that ships with Windows.
@@ -115,6 +135,8 @@ To also build the installer (into `dist\`), install [Inno Setup 6](https://jrsof
 | `src/SettingsForm.cs` | Settings window |
 | `src/Settings.cs` | Settings storage (registry or `portable.ini`) |
 | `src/Updater.cs` | Update check and download from GitHub Releases |
+| `src/DeviceWatcher.cs` | Device plugged in / out notifications, reading pace |
+| `src/Logger.cs` | Optional diagnostic log with size rotation |
 | `src/Lang.cs` | All the texts, in English and French |
 | `src/Theme.cs` | Light / dark theme |
 | `src/Ui.cs` | Tray icon and gear drawing |

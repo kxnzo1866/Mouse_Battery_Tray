@@ -21,6 +21,9 @@ namespace MouseBatteryTray
         bool SetStartup(bool on, out string error);
         void SetAlert(bool enabled, int level);
         void SetInterval(int seconds);
+        void SetAdaptive(bool on);
+        void SetLogging(bool on);
+        DateTime NextRefresh { get; }
         void RefreshNow();
         void Exit();
         event EventHandler StateChanged;
@@ -52,6 +55,11 @@ namespace MouseBatteryTray
         readonly Button bRefresh = new Button(), bClose = new Button();
         readonly LinkLabel kGitHub = new LinkLabel(), kLicense = new LinkLabel();
         readonly List<string> mouseKeys = new List<string>();
+
+        // Reading pace and diagnostic log
+        readonly CheckBox xAdaptive = new CheckBox(), xLog = new CheckBox();
+        readonly Label hDiag = new Label(), lLogHint = new Label();
+        readonly LinkLabel kLogFolder = new LinkLabel();
 
         // Updates
         readonly Label hUpdates = new Label(), lCurrent = new Label(), lUpdate = new Label();
@@ -111,10 +119,23 @@ namespace MouseBatteryTray
             Hint(lMouseHint);
             Row(lMouseHint, null);
             Row(Caption(lInterval), Combo(cInterval));
+            Check(xAdaptive);
+            Row(xAdaptive, null);
             Button(bRefresh);
             lLast.AutoSize = true;
             lLast.Anchor = AnchorStyles.Left;
+            lLast.MaximumSize = new Size(S(250), 0);
             Row(bRefresh, lLast);
+
+            // Diagnostic
+            Header(hDiag, true);
+            Row(hDiag, null);
+            Check(xLog);
+            kLogFolder.AutoSize = true;
+            kLogFolder.Anchor = AnchorStyles.Left;
+            Row(xLog, kLogFolder);
+            Hint(lLogHint);
+            Row(lLogHint, null);
 
             // Updates
             Header(hUpdates, true);
@@ -182,6 +203,13 @@ namespace MouseBatteryTray
             };
             cInterval.SelectedIndexChanged += delegate { if (!loading && cInterval.SelectedIndex >= 0) host.SetInterval(AppSettings.Intervals[cInterval.SelectedIndex]); };
             bRefresh.Click += delegate { host.RefreshNow(); lLast.Text = Lang.T("Set.Reading"); };
+            xAdaptive.CheckedChanged += delegate { if (!loading) host.SetAdaptive(xAdaptive.Checked); };
+            xLog.CheckedChanged += delegate { if (!loading) host.SetLogging(xLog.Checked); };
+            kLogFolder.LinkClicked += delegate
+            {
+                try { Directory.CreateDirectory(Logger.Folder); } catch { }
+                Open(Logger.Folder);
+            };
             bClose.Click += delegate { Close(); };
             bCheck.Click += delegate { CheckForUpdate(); };
             bInstall.Click += delegate { InstallUpdate(); };
@@ -301,6 +329,11 @@ namespace MouseBatteryTray
             lMouseHint.Text = Lang.T("Set.MouseHint");
             lInterval.Text = Lang.T("Set.Interval");
             bRefresh.Text = Lang.T("Set.RefreshNow");
+            xAdaptive.Text = Lang.T("Set.Adaptive");
+            hDiag.Text = Lang.T("Set.Diagnostic");
+            xLog.Text = Lang.T("Set.Log");
+            kLogFolder.Text = Lang.T("Set.LogFolder");
+            lLogHint.Text = Lang.F("Set.LogHint", Logger.Files, Logger.MaxBytes / (1024 * 1024));
             hUpdates.Text = Lang.T("Set.Updates");
             lCurrent.Text = Lang.F("Upd.Current", Updater.Format(Updater.Current));
             bCheck.Text = Lang.T("Upd.Check");
@@ -367,6 +400,8 @@ namespace MouseBatteryTray
         {
             if (host.Busy) lLast.Text = Lang.T("Set.Reading");
             else if (host.LastRefresh == DateTime.MinValue) lLast.Text = Lang.T("Set.NoReading");
+            else if (host.NextRefresh > DateTime.Now)
+                lLast.Text = Lang.F("Set.LastNext", host.LastRefresh.ToString("HH:mm:ss"), host.NextRefresh.ToString("HH:mm:ss"));
             else lLast.Text = Lang.F("Set.LastReading", host.LastRefresh.ToString("HH:mm:ss"));
         }
 
@@ -465,6 +500,8 @@ namespace MouseBatteryTray
             nAlert.Value = AppSettings.AlertLevel;
             nAlert.Enabled = xAlert.Checked;
             cInterval.SelectedIndex = Math.Max(0, Array.IndexOf(AppSettings.Intervals, AppSettings.IntervalSeconds));
+            xAdaptive.Checked = AppSettings.Adaptive;
+            xLog.Checked = AppSettings.LogEnabled;
             FillMice();
             UpdateLastReading();
             loading = was;
@@ -476,7 +513,7 @@ namespace MouseBatteryTray
             BackColor = Theme.Bg;
             ForeColor = Theme.Fg;
             Style(this);
-            foreach (Label l in new Label[] { lMouseHint, lChargeText, lUnofficial, lLast, lVersion, lLicense, lUpdate })
+            foreach (Label l in new Label[] { lMouseHint, lChargeText, lUnofficial, lLast, lVersion, lLicense, lUpdate, lLogHint })
                 l.ForeColor = Theme.Sub;
             Theme.ApplyTitleBar(this);
             Invalidate(true);

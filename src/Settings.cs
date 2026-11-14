@@ -124,6 +124,20 @@ namespace MouseBatteryTray
             set { Set("RefreshInterval", value.ToString()); }
         }
 
+        // Read less often while the level does not change (on by default).
+        public static bool Adaptive
+        {
+            get { return Get("AdaptiveReading", "1") != "0"; }
+            set { Set("AdaptiveReading", value ? "1" : "0"); }
+        }
+
+        // Diagnostic log file (off by default).
+        public static bool LogEnabled
+        {
+            get { return Get("DiagnosticLog", "0") == "1"; }
+            set { Set("DiagnosticLog", value ? "1" : "0"); }
+        }
+
         // ---- Start with Windows ----
         // Standard mode: a value under HKCU\...\Run (also written by the installer).
         // Portable mode: a shortcut in the user's Startup folder, so the registry is never touched.

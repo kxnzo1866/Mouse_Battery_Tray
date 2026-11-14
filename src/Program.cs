@@ -18,8 +18,13 @@ namespace MouseBatteryTray
 {
     static class Program
     {
+        public const string MutexName = "MouseBatteryTray_SingleInstance";     // also used by installer\setup.iss
+        public const string ShowEventName = "MouseBatteryTray_ShowSettings";
+
         [DllImport("user32.dll")]
         static extern bool SetProcessDPIAware();
+        [DllImport("user32.dll")]
+        static extern bool AllowSetForegroundWindow(int processId);
 
         [STAThread]
         static int Main(string[] args)
@@ -96,10 +101,21 @@ namespace MouseBatteryTray
                 return 0;
             }
 
+            // Single instance. The installer also looks for this mutex to know whether the app is still running.
             bool created;
-            using (Mutex mutex = new Mutex(true, "MouseBatteryTray_SingleInstance", out created))
+            using (Mutex mutex = new Mutex(true, MutexName, out created))
             {
-                if (!created) return 0;
+                if (!created)
+                {
+                    // Already running: ask the running copy to show its settings window, then quit.
+                    try
+                    {
+                        AllowSetForegroundWindow(-1);   // let the running copy bring its window to the front
+                        using (EventWaitHandle show = EventWaitHandle.OpenExisting(ShowEventName)) show.Set();
+                    }
+                    catch { }
+                    return 0;
+                }
                 try { SetProcessDPIAware(); } catch { }
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);

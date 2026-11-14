@@ -23,8 +23,8 @@ using Microsoft.Win32.SafeHandles;
 [assembly: System.Reflection.AssemblyTitle("Mouse Battery Tray")]
 [assembly: System.Reflection.AssemblyProduct("Mouse Battery Tray")]
 [assembly: System.Reflection.AssemblyDescription("Battery level of a wireless mouse (Pulsar, Logitech) in the notification area (unofficial project)")]
-[assembly: System.Reflection.AssemblyVersion("1.3.0.0")]
-[assembly: System.Reflection.AssemblyFileVersion("1.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("1.4.0.0")]
+[assembly: System.Reflection.AssemblyFileVersion("1.4.0.0")]
 
 namespace MouseBatteryTray
 {

@@ -4,9 +4,11 @@
 ; Silent install for testing: /VERYSILENT /LANG=french|english /DIR="..." and /PORTABLE=1 for the portable mode.
 
 #define AppName "Mouse Battery Tray"
-#define AppVersion "1.3.0"
+#define AppVersion "1.4.0"
 #define AppExe "MouseBatteryTray.exe"
 #define RunValue "MouseBatteryTray"
+; Created by the running app (src\Program.cs): tells whether it is still open.
+#define AppMutex "MouseBatteryTray_SingleInstance"
 ; Versions up to 1.0.0 were named "Pulsar Battery Tray": they are uninstalled automatically.
 #define OldAppId "{6E0B5C3A-7B0D-4E53-9F0C-2B6C1A4D8E71}"
 #define OldExe "PulsarBattery.exe"
@@ -125,6 +127,28 @@ begin
   end;
 end;
 
+// Waits up to Seconds for the app to close (its mutex disappears). Returns True if it is closed.
+function WaitForAppToClose(Seconds: Integer): Boolean;
+var
+  i: Integer;
+begin
+  i := 0;
+  while CheckForMutexes('{#AppMutex}') and (i < Seconds * 10) do
+  begin
+    Sleep(100);
+    i := i + 1;
+  end;
+  Result := not CheckForMutexes('{#AppMutex}');
+end;
+
+// Started by the app's "Install" button (/UPDATE=1): the app is closing itself, give it a moment.
+function InitializeSetup: Boolean;
+begin
+  if ExpandConstant('{param:UPDATE|0}') = '1' then
+    WaitForAppToClose(10);
+  Result := True;
+end;
+
 // Closes a running copy so the exe can be replaced. A standard installation also closes and
 // silently uninstalls a previous "Pulsar Battery Tray" (a portable copy leaves installed versions alone).
 function PrepareToInstall(var NeedsRestart: Boolean): String;
@@ -132,7 +156,11 @@ var
   Code: Integer;
   OldUninstaller: String;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  if CheckForMutexes('{#AppMutex}') then
+  begin
+    Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#AppExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);
+    WaitForAppToClose(5);
+  end;
   if not IsPortable then
   begin
     Exec(ExpandConstant('{sys}\taskkill.exe'), '/IM {#OldExe} /F', '', SW_HIDE, ewWaitUntilTerminated, Code);

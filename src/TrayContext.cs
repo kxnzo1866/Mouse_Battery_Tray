@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -18,17 +19,25 @@ namespace MouseBatteryTray
         readonly NotifyIcon tray = new NotifyIcon();
         readonly ContextMenuStrip menu = new ContextMenuStrip();
         readonly DetailsForm details = new DetailsForm();
-        readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();       // regular readings
+        readonly System.Windows.Forms.Timer soonTimer = new System.Windows.Forms.Timer();   // reading soon after an event
         readonly TaskScheduler ui;
+        readonly SynchronizationContext uiContext;
         readonly ToolStripMenuItem itemHeader, itemDetails, itemRefresh, itemDevices, itemSettings, itemStartup, itemAlert, itemExit;
+        readonly DeviceWatcher watcher;
         SettingsForm settings;
+        EventWaitHandle showEvent;
+        RegisteredWaitHandle showWait;
 
         readonly List<DeviceTrack> tracks = new List<DeviceTrack>();
         List<Reading> lastReadings = new List<Reading>();
         string selectedKey;          // "" = automatic
         string autoKey = "";         // mouse shown last in automatic mode
-        bool busy;
-        DateTime lastRefresh = DateTime.MinValue;
+        bool busy, pendingRefresh;
+        string soonReason = "";
+        DateTime lastRefresh = DateTime.MinValue, nextRefresh = DateTime.MinValue;
+        Dictionary<string, Reading> baseline = new Dictionary<string, Reading>();   // last readings that counted as a change
+        int stableReads;             // consecutive readings without change
         Icon currentIcon;
 
         public event EventHandler StateChanged;
@@ -37,7 +46,11 @@ namespace MouseBatteryTray
         {
             if (SynchronizationContext.Current == null)
                 SynchronizationContext.SetSynchronizationContext(new WindowsFormsSynchronizationContext());
+            uiContext = SynchronizationContext.Current;
             ui = TaskScheduler.FromCurrentSynchronizationContext();
+            Logger.Enabled = AppSettings.LogEnabled;
+            Logger.Write("Mouse Battery Tray " + Updater.Format(Updater.Current) + " started (" +
+                         (AppSettings.IsPortable ? "portable" : "standard") + ", " + Application.ExecutablePath + ")");
             Lang.Set(AppSettings.Language);
             Theme.Set(AppSettings.Theme);
             selectedKey = AppSettings.SelectedDevice;
@@ -85,15 +98,66 @@ namespace MouseBatteryTray
             Lang.Changed += OnLangChanged;
             Theme.Changed += OnThemeChanged;
             SystemEvents.UserPreferenceChanged += OnWindowsPreferenceChanged;
+            SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            SystemEvents.SessionSwitch += OnSessionSwitch;
+            watcher = new DeviceWatcher();
+            watcher.Changed += OnDeviceChanged;
+            ListenForSecondLaunch();
 
             ApplyMenuTexts();
             Apply(new List<Reading>());
             tray.Visible = true;
 
-            timer.Interval = AppSettings.IntervalSeconds * 1000;
-            timer.Tick += delegate { RefreshNow(); };
-            timer.Start();
-            RefreshNow();
+            timer.Tick += delegate { timer.Stop(); RefreshNow("timer"); };
+            soonTimer.Tick += delegate { soonTimer.Stop(); RefreshNow(soonReason); };
+            RefreshNow("start");
+        }
+
+        // ---- Reading again after an event, instead of waiting for the next regular reading ----
+
+        // Several events often come in a row (a receiver exposes several interfaces): they are merged into one reading.
+        void ReadSoon(int delayMs, string reason)
+        {
+            stableReads = 0;
+            soonReason = reason;
+            soonTimer.Stop();
+            soonTimer.Interval = delayMs;
+            soonTimer.Start();
+        }
+
+        // SystemEvents may be raised on another thread: hand the work over to the UI thread.
+        void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
+        {
+            if (e.Mode != PowerModes.Resume) return;
+            uiContext.Post(delegate { Logger.Write("PC resumed from sleep"); ReadSoon(5000, "resume from sleep"); }, null);
+        }
+
+        // Laptops with modern standby do not always report a resume: unlocking the session also triggers a reading.
+        void OnSessionSwitch(object sender, SessionSwitchEventArgs e)
+        {
+            if (e.Reason != SessionSwitchReason.SessionUnlock) return;
+            uiContext.Post(delegate { Logger.Write("Session unlocked"); ReadSoon(2000, "session unlocked"); }, null);
+        }
+
+        // A receiver or a mouse was plugged in or out. A new device needs a moment before it answers.
+        void OnDeviceChanged(string path, bool arrived)
+        {
+            Logger.Write("Device " + (arrived ? "connected: " : "removed: ") + path);
+            ReadSoon(arrived ? 2500 : 1000, arrived ? "device connected" : "device removed");
+        }
+
+        // A second launch of the exe does not start another copy: it asks this one to show its settings.
+        void ListenForSecondLaunch()
+        {
+            try
+            {
+                showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, Program.ShowEventName);
+                showWait = ThreadPool.RegisterWaitForSingleObject(showEvent, delegate
+                {
+                    uiContext.Post(delegate { Logger.Write("Second launch: showing the settings"); ShowSettings(); }, null);
+                }, null, -1, false);
+            }
+            catch (Exception e) { Logger.Write("Second-launch signal unavailable: " + e.Message); }
         }
 
         void ApplyMenuTexts()
@@ -123,8 +187,11 @@ namespace MouseBatteryTray
         void OnWindowsPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
         {
             if (e.Category != UserPreferenceCategory.General) return;
-            if (Theme.Mode == "system") Theme.Notify();
-            Render();
+            uiContext.Post(delegate
+            {
+                if (Theme.Mode == "system") Theme.Notify();
+                Render();
+            }, null);
         }
 
         void RaiseStateChanged()
@@ -155,7 +222,7 @@ namespace MouseBatteryTray
         void ShowDetails()
         {
             details.ShowNearTray();
-            RefreshNow();
+            RefreshNow("details opened");
         }
 
         // Only one settings window at a time: bring it back if it is already open.
@@ -230,11 +297,29 @@ namespace MouseBatteryTray
         public void SetInterval(int seconds)
         {
             AppSettings.IntervalSeconds = seconds;
-            timer.Stop();
-            timer.Interval = AppSettings.IntervalSeconds * 1000;
-            timer.Start();
+            Schedule(false);
             RaiseStateChanged();
         }
+
+        public bool Adaptive { get { return AppSettings.Adaptive; } }
+
+        public void SetAdaptive(bool on)
+        {
+            AppSettings.Adaptive = on;
+            Schedule(false);
+            RaiseStateChanged();
+        }
+
+        public void SetLogging(bool on)
+        {
+            if (!on) Logger.Write("Diagnostic log disabled");
+            AppSettings.LogEnabled = on;
+            Logger.Enabled = on;
+            if (on) Logger.Write("Diagnostic log enabled (Mouse Battery Tray " + Updater.Format(Updater.Current) + ")");
+            RaiseStateChanged();
+        }
+
+        public DateTime NextRefresh { get { return nextRefresh; } }
 
         public void Exit()
         {
@@ -243,16 +328,91 @@ namespace MouseBatteryTray
 
         public void RefreshNow()
         {
-            if (busy) return;
+            RefreshNow("manual");
+        }
+
+        void RefreshNow(string reason)
+        {
+            // A reading is already running: do another one right after, so the event is not missed.
+            if (busy) { pendingRefresh = true; return; }
             busy = true;
-            Task.Factory.StartNew<List<Reading>>(delegate { return Devices.ReadAll(null); })
-                .ContinueWith(delegate(Task<List<Reading>> t)
+            timer.Stop();
+            bool log = Logger.Enabled;
+            Task.Factory.StartNew<Tuple<List<Reading>, StringBuilder>>(delegate
+            {
+                StringBuilder sb = log ? new StringBuilder() : null;
+                return Tuple.Create(Devices.ReadAll(sb), sb);
+            })
+            .ContinueWith(delegate(Task<Tuple<List<Reading>, StringBuilder>> t)
+            {
+                busy = false;
+                lastRefresh = DateTime.Now;
+                List<Reading> list = t.IsFaulted ? new List<Reading>() : t.Result.Item1;
+                Apply(list);
+                int delay = Schedule(true);
+                if (log)
                 {
-                    busy = false;
-                    lastRefresh = DateTime.Now;
-                    Apply(t.IsFaulted ? new List<Reading>() : t.Result);
-                    RaiseStateChanged();
-                }, ui);
+                    StringBuilder sb = new StringBuilder("Reading (" + reason + ")\n");
+                    if (t.IsFaulted) sb.AppendLine("Exception: " + t.Exception.GetBaseException());
+                    else if (t.Result.Item2 != null) sb.Append(t.Result.Item2);
+                    foreach (Reading r in list) sb.AppendLine("Result: " + Describe(r));
+                    if (list.Count == 0) sb.AppendLine("Result: no mouse found");
+                    sb.Append("Next reading in " + delay + " s (stable readings: " + stableReads + ")");
+                    Logger.Write(sb.ToString());
+                }
+                if (pendingRefresh) { pendingRefresh = false; ReadSoon(500, "queued event"); }
+                RaiseStateChanged();
+            }, ui);
+        }
+
+        static string Describe(Reading r)
+        {
+            return r.Name + " | " + r.State + " | " + r.Percent + "% | charging=" + r.Charging + " | full=" + r.Full +
+                   " | " + r.Millivolts + " mV | " + r.Connection + (r.VoltageBased ? " | voltage-based" : "");
+        }
+
+        // ---- Pace of the regular readings ----
+
+        // Nothing that matters changed since the baseline: same mice, same state, level within 1%.
+        bool SameAsBaseline(List<Reading> readings)
+        {
+            if (readings.Count != baseline.Count) return false;
+            foreach (Reading r in readings)
+            {
+                Reading b;
+                if (!baseline.TryGetValue(r.Key, out b)) return false;
+                if (b.State != r.State || b.Charging != r.Charging || b.Full != r.Full || Math.Abs(b.Percent - r.Percent) >= 2) return false;
+            }
+            return true;
+        }
+
+        // Plans the next regular reading; afterReading = a reading just finished (updates the stability count).
+        int Schedule(bool afterReading)
+        {
+            if (afterReading)
+            {
+                if (SameAsBaseline(lastReadings)) stableReads++;
+                else
+                {
+                    stableReads = 0;
+                    baseline = new Dictionary<string, Reading>();
+                    foreach (Reading r in lastReadings) baseline[r.Key] = r;
+                }
+            }
+            bool allOk = lastReadings.Count > 0, charging = false, settling = false, low = false;
+            foreach (Reading r in lastReadings)
+            {
+                if (r.State != MouseState.Ok) { allOk = false; continue; }
+                if (r.Charging) charging = true;
+                if (IsSettling(FindTrack(r.Key), r)) settling = true;
+                if (r.Percent <= AppSettings.AlertLevel + 5) low = true;
+            }
+            int delay = Pacing.NextDelay(AppSettings.IntervalSeconds, AppSettings.Adaptive, allOk, charging, settling, low, stableReads);
+            timer.Stop();
+            timer.Interval = delay * 1000;
+            timer.Start();
+            nextRefresh = DateTime.Now.AddSeconds(delay);
+            return delay;
         }
 
         // ---- Readings ----
@@ -406,8 +566,15 @@ namespace MouseBatteryTray
 
         protected override void ExitThreadCore()
         {
+            Logger.Write("Mouse Battery Tray stopped");
             timer.Stop();
+            soonTimer.Stop();
             SystemEvents.UserPreferenceChanged -= OnWindowsPreferenceChanged;
+            SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+            SystemEvents.SessionSwitch -= OnSessionSwitch;
+            watcher.Dispose();
+            if (showWait != null) showWait.Unregister(null);
+            if (showEvent != null) showEvent.Dispose();
             Lang.Changed -= OnLangChanged;
             Theme.Changed -= OnThemeChanged;
             if (settings != null && !settings.IsDisposed) settings.Close();
