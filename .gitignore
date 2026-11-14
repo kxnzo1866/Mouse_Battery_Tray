@@ -1,0 +1,6 @@
+# Generated files: they belong in GitHub Releases, not in the source tree.
+*.exe
+dist/
+preview.png
+diag.txt
+portable.ini
