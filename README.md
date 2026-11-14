@@ -38,12 +38,13 @@ The installer is not code-signed (certificates cost money), so Windows SmartScre
 | Pulsar X2 V2 Mini, plugged in over USB | Tested |
 | Pulsar X2 V2 Mini, 2.4 GHz wireless receiver | Tested |
 | Other Pulsar mice | Not tested |
-| Logitech wireless mice (HID++ 2.0: Lightspeed, Unifying, Bolt, USB cable) | Experimental, not tested on a Logitech mouse yet |
+| Logitech G502 Wireless | Tested (reported working by a user) |
+| Other Logitech wireless mice (HID++ 2.0: Lightspeed, Unifying, Bolt, USB cable) | Experimental, not tested |
 | Logitech mice over Bluetooth | Experimental, not tested |
 | Older Logitech mice (HID++ 1.0) | Not supported |
 
 - **Pulsar**: the app looks for Pulsar devices (USB vendor ID `3554`). Other models using the same protocol may work.
-- **Logitech**: the app uses Logitech's HID++ 2.0 protocol and reads the mouse name and battery from the device itself (battery features `0x1004`, `0x1000` or `0x1001`). Keyboards, headsets and other non-mouse devices are ignored. The protocol handling was checked against a Logitech HID++ device, but not yet against a Logitech mouse.
+- **Logitech**: the app uses Logitech's HID++ 2.0 protocol and reads the mouse name and battery from the device itself (battery features `0x1004`, `0x1000` or `0x1001`). Keyboards, headsets and other non-mouse devices are ignored. It has been confirmed working on a Logitech G502 Wireless; other HID++ 2.0 mice should work the same way but have not been tested.
 
 Feedback is welcome in the *Issues*, ideally with the output of the diagnostic mode (see below).
 
