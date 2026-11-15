@@ -18,10 +18,13 @@ namespace MouseBatteryTray
         void SelectDevice(string key);
         void SetLanguage(string code);
         void SetTheme(string mode);
+        void SetVisualStyle(string style);
+        void SetEffects(bool on);
         bool SetStartup(bool on, out string error);
         void SetAlert(bool enabled, int level);
         void SetInterval(int seconds);
         void SetAdaptive(bool on);
+        void SetIconPercent(bool on);
         void SetLogging(bool on);
         DateTime NextRefresh { get; }
         void RefreshNow();
@@ -43,16 +46,27 @@ namespace MouseBatteryTray
         readonly float s;
         bool loading;
 
-        readonly TableLayoutPanel table = new TableLayoutPanel();
+        // Two pages ("General", "Styles") under a tab strip, the Close button below them.
+        readonly TableLayoutPanel outer = new TableLayoutPanel();
+        readonly TabStrip tabs = new TabStrip();
+        readonly Panel pages = new Panel();
+        readonly TableLayoutPanel table = new TableLayoutPanel(), styles = new TableLayoutPanel();
+        TableLayoutPanel target;          // page that Row() fills
+
+        // Styles page
+        readonly Label hStyle = new Label(), lEffectsHint = new Label();
+        readonly CheckBox xEffects = new CheckBox();
+        readonly List<StyleCard> cards = new List<StyleCard>();
+
         readonly Label hGeneral = new Label(), lLanguage = new Label(), lTheme = new Label();
         readonly Label hBattery = new Label(), lPercent = new Label(), lMouse = new Label(), lMouseHint = new Label();
         readonly Label lInterval = new Label(), lLast = new Label();
         readonly Label hAbout = new Label(), lVersion = new Label(), lLicense = new Label();
         readonly Label lChargeTitle = new Label(), lChargeText = new Label(), lUnofficial = new Label();
         readonly ComboBox cLanguage = new ComboBox(), cTheme = new ComboBox(), cMouse = new ComboBox(), cInterval = new ComboBox();
-        readonly CheckBox xStartup = new CheckBox(), xAlert = new CheckBox();
+        readonly CheckBox xStartup = new CheckBox(), xAlert = new CheckBox(), xIconPercent = new CheckBox();
         readonly NumericUpDown nAlert = new NumericUpDown();
-        readonly Button bRefresh = new Button(), bClose = new Button();
+        readonly Button bRefresh = new StyledButton(), bClose = new StyledButton();
         readonly LinkLabel kGitHub = new LinkLabel(), kLicense = new LinkLabel();
         readonly List<string> mouseKeys = new List<string>();
 
@@ -63,7 +77,7 @@ namespace MouseBatteryTray
 
         // Updates
         readonly Label hUpdates = new Label(), lCurrent = new Label(), lUpdate = new Label();
-        readonly Button bCheck = new Button(), bInstall = new Button();
+        readonly Button bCheck = new StyledButton(), bInstall = new StyledButton();
         readonly LinkLabel kNotes = new LinkLabel();
         UpdateState updState = UpdateState.Idle;
         UpdateInfo update;
@@ -87,18 +101,14 @@ namespace MouseBatteryTray
             Padding = new Padding(S(18), S(10), S(18), S(14));
             try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
 
-            table.ColumnCount = 2;
-            table.AutoSize = true;
-            table.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            table.Location = new Point(Padding.Left, Padding.Top);
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
-            table.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            Page(table);
+            Page(styles);
+            target = table;
 
             // General
             Header(hGeneral, false);
             Row(hGeneral, null);
             Row(Caption(lLanguage), Combo(cLanguage));
-            Row(Caption(lTheme), Combo(cTheme));
             Check(xStartup);
             Row(xStartup, null);
 
@@ -115,6 +125,8 @@ namespace MouseBatteryTray
             lPercent.AutoSize = true;
             lPercent.Anchor = AnchorStyles.Left;
             Row(xAlert, Flow(nAlert, lPercent));
+            Check(xIconPercent);
+            Row(xIconPercent, null);
             Row(Caption(lMouse), Combo(cMouse));
             Hint(lMouseHint);
             Row(lMouseHint, null);
@@ -175,16 +187,68 @@ namespace MouseBatteryTray
             Wrapped(lUnofficial);
             Row(lUnofficial, null);
 
+            // Styles: light/dark theme, one card per style, transparency effects
+            target = styles;
+            Header(hStyle, false);
+            Row(hStyle, null);
+            Row(Caption(lTheme), Combo(cTheme));
+            TableLayoutPanel grid = new TableLayoutPanel();
+            grid.ColumnCount = 2;
+            grid.AutoSize = true;
+            grid.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            grid.Margin = new Padding(0, S(6), 0, S(2));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            grid.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            for (int i = 0; i < Theme.Styles.Length; i++)
+            {
+                StyleCard card = new StyleCard(Theme.Styles[i]);
+                card.Size = new Size(S(214), S(196));
+                card.Margin = new Padding(0, 0, i % 2 == 0 ? S(12) : 0, S(12));
+                card.Picked += delegate(object sender, EventArgs e) { host.SetVisualStyle(((StyleCard)sender).Key); };
+                cards.Add(card);
+                grid.Controls.Add(card, i % 2, i / 2);
+            }
+            Row(grid, null);
+            Check(xEffects);
+            Row(xEffects, null);
+            Hint(lEffectsHint);
+            Row(lEffectsHint, null);
+
+            // Window: tabs, the page shown, Close
+            pages.Margin = new Padding(0);
+            table.Location = Point.Empty;
+            styles.Location = Point.Empty;
+            styles.Visible = false;
+            pages.Controls.Add(table);
+            pages.Controls.Add(styles);
+            tabs.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+            tabs.Margin = new Padding(0, S(2), 0, S(10));
+
             Button(bClose);
             FlowLayoutPanel closeRow = Flow(bClose);
             closeRow.FlowDirection = FlowDirection.RightToLeft;
             closeRow.Dock = DockStyle.Fill;
             closeRow.Margin = new Padding(0, S(12), 0, 0);
-            Row(closeRow, null);
-            Controls.Add(table);
+
+            outer.ColumnCount = 1;
+            outer.AutoSize = true;
+            outer.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            outer.Location = new Point(Padding.Left, Padding.Top);
+            outer.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            for (int i = 0; i < 3; i++) outer.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            outer.Controls.Add(tabs, 0, 0);
+            outer.Controls.Add(pages, 0, 1);
+            outer.Controls.Add(closeRow, 0, 2);
+            Controls.Add(outer);
             CancelButton = bClose;
 
             // Events
+            tabs.SelectedChanged += delegate
+            {
+                table.Visible = tabs.Selected == 0;
+                styles.Visible = tabs.Selected == 1;
+            };
+            xEffects.CheckedChanged += delegate { if (!loading) host.SetEffects(xEffects.Checked); };
             cLanguage.SelectedIndexChanged += delegate { if (!loading) host.SetLanguage(cLanguage.SelectedIndex == 0 ? "fr" : "en"); };
             cTheme.SelectedIndexChanged += delegate { if (!loading && cTheme.SelectedIndex >= 0) host.SetTheme(Theme.Modes[cTheme.SelectedIndex]); };
             xStartup.CheckedChanged += delegate
@@ -196,6 +260,7 @@ namespace MouseBatteryTray
             };
             xAlert.CheckedChanged += delegate { nAlert.Enabled = xAlert.Checked; if (!loading) host.SetAlert(xAlert.Checked, (int)nAlert.Value); };
             nAlert.ValueChanged += delegate { if (!loading) host.SetAlert(xAlert.Checked, (int)nAlert.Value); };
+            xIconPercent.CheckedChanged += delegate { if (!loading) host.SetIconPercent(xIconPercent.Checked); };
             cMouse.SelectedIndexChanged += delegate
             {
                 if (loading || cMouse.SelectedIndex < 0) return;
@@ -205,11 +270,7 @@ namespace MouseBatteryTray
             bRefresh.Click += delegate { host.RefreshNow(); lLast.Text = Lang.T("Set.Reading"); };
             xAdaptive.CheckedChanged += delegate { if (!loading) host.SetAdaptive(xAdaptive.Checked); };
             xLog.CheckedChanged += delegate { if (!loading) host.SetLogging(xLog.Checked); };
-            kLogFolder.LinkClicked += delegate
-            {
-                try { Directory.CreateDirectory(Logger.Folder); } catch { }
-                Open(Logger.Folder);
-            };
+            kLogFolder.LinkClicked += delegate { OpenFolder(Logger.Folder); };
             bClose.Click += delegate { Close(); };
             bCheck.Click += delegate { CheckForUpdate(); };
             bInstall.Click += delegate { InstallUpdate(); };
@@ -233,13 +294,41 @@ namespace MouseBatteryTray
         int S(int px) { return (int)Math.Round(px * s); }
 
         // ---- Layout helpers ----
+        static void Page(TableLayoutPanel t)
+        {
+            t.ColumnCount = 2;
+            t.AutoSize = true;
+            t.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            t.Margin = new Padding(0);
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            t.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        }
+
         void Row(Control a, Control b)
         {
-            int r = table.RowCount++;
-            table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            table.Controls.Add(a, 0, r);
-            if (b != null) table.Controls.Add(b, 1, r);
-            else table.SetColumnSpan(a, 2);
+            int r = target.RowCount++;
+            target.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            target.Controls.Add(a, 0, r);
+            if (b != null) target.Controls.Add(b, 1, r);
+            else target.SetColumnSpan(a, 2);
+        }
+
+        // Both pages share one size (the larger), so the window does not jump when switching tabs.
+        void FitPages()
+        {
+            Size a = table.GetPreferredSize(Size.Empty), b = styles.GetPreferredSize(Size.Empty);
+            Size size = new Size(Math.Max(a.Width, b.Width), Math.Max(a.Height, b.Height));
+            if (pages.Size != size) pages.Size = size;
+        }
+
+        protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+        {
+            if (keyData == (Keys.Control | Keys.Tab) || keyData == (Keys.Control | Keys.Shift | Keys.Tab))
+            {
+                tabs.Selected = 1 - tabs.Selected;
+                return true;
+            }
+            return base.ProcessCmdKey(ref msg, keyData);
         }
 
         void Header(Label l, bool spaced)
@@ -325,6 +414,7 @@ namespace MouseBatteryTray
             hBattery.Text = Lang.T("Set.Battery");
             xAlert.Text = Lang.T("Set.Alert");
             lPercent.Text = Lang.Pct("").Trim();
+            xIconPercent.Text = Lang.T("Set.IconPercent");
             lMouse.Text = Lang.T("Set.Mouse");
             lMouseHint.Text = Lang.T("Set.MouseHint");
             lInterval.Text = Lang.T("Set.Interval");
@@ -349,6 +439,17 @@ namespace MouseBatteryTray
             lChargeText.Text = Lang.T("About.ChargeText");
             lUnofficial.Text = Lang.T("About.Unofficial");
             bClose.Text = Lang.T("Set.Close");
+            tabs.SetItems(new string[] { Lang.T("Set.TabGeneral"), Lang.T("Set.TabStyles") });
+            hStyle.Text = Lang.T("Set.Style");
+            xEffects.Text = Lang.T("Set.Effects");
+            lEffectsHint.Text = Lang.T("Set.EffectsHint");
+            foreach (StyleCard card in cards)
+            {
+                card.Title = Lang.T("Style." + card.Key);
+                card.Description = Lang.T("Style." + card.Key + ".Desc");
+                card.AccessibleName = card.Title;
+                card.Invalidate();
+            }
 
             Fill(cLanguage, new string[] { Lang.T("Lang.fr"), Lang.T("Lang.en") });
             List<string> themes = new List<string>();
@@ -361,6 +462,7 @@ namespace MouseBatteryTray
             FillMice();
             UpdateLastReading();
             ResumeLayout(true);
+            FitPages();
             loading = was;
         }
 
@@ -422,6 +524,7 @@ namespace MouseBatteryTray
             kNotes.Visible = available && update != null && update.PageUrl.Length > 0;
             bInstall.Enabled = updState == UpdateState.Available;
             bCheck.Enabled = updState != UpdateState.Checking && updState != UpdateState.Downloading;
+            FitPages();
         }
 
         void SetUpdateState(UpdateState state)
@@ -499,22 +602,37 @@ namespace MouseBatteryTray
             xAlert.Checked = AppSettings.AlertEnabled;
             nAlert.Value = AppSettings.AlertLevel;
             nAlert.Enabled = xAlert.Checked;
+            xIconPercent.Checked = AppSettings.IconPercent;
             cInterval.SelectedIndex = Math.Max(0, Array.IndexOf(AppSettings.Intervals, AppSettings.IntervalSeconds));
             xAdaptive.Checked = AppSettings.Adaptive;
             xLog.Checked = AppSettings.LogEnabled;
+            xEffects.Checked = Theme.Effects;
+            foreach (StyleCard card in cards) card.Selected = card.Key == Theme.Style;
             FillMice();
             UpdateLastReading();
+            FitPages();
             loading = was;
         }
 
-        // ---- Theme ----
+        // ---- Theme and visual style ----
         void ApplyTheme()
         {
-            BackColor = Theme.Bg;
-            ForeColor = Theme.Fg;
+            Palette p = Theme.P;
+            SuspendLayout();
+            Font = Theme.MakeFont(p.BodyFont, 9f);
+            foreach (Label h in new Label[] { hGeneral, hBattery, hDiag, hUpdates, hAbout, hStyle })
+                h.Font = Theme.MakeFont(p.HeaderFont, p.HeaderSize);
+            lChargeTitle.Font = Theme.MakeFont(p.Style == "metro" ? "Segoe UI Semilight" : "Segoe UI Semibold", 9f);
+            BackColor = p.Bg;
+            ForeColor = p.Fg;
             Style(this);
-            foreach (Label l in new Label[] { lMouseHint, lChargeText, lUnofficial, lLast, lVersion, lLicense, lUpdate, lLogHint })
-                l.ForeColor = Theme.Sub;
+            foreach (Label h in new Label[] { hGeneral, hBattery, hDiag, hUpdates, hAbout, hStyle })
+                h.ForeColor = p.HeaderFg;
+            foreach (Label l in new Label[] { lMouseHint, lChargeText, lUnofficial, lLast, lVersion, lLicense, lUpdate, lLogHint, lEffectsHint })
+                l.ForeColor = p.Sub;
+            tabs.Measure();
+            ResumeLayout(true);
+            FitPages();
             Theme.ApplyTitleBar(this);
             Invalidate(true);
         }
@@ -531,11 +649,13 @@ namespace MouseBatteryTray
                 }
                 else if (c is Button)
                 {
-                    Button b = (Button)c;
-                    b.BackColor = Theme.Surface;
-                    b.FlatAppearance.BorderColor = Theme.Border;
-                    b.FlatAppearance.MouseOverBackColor = Theme.Hover;
-                    b.FlatAppearance.MouseDownBackColor = Theme.Track;
+                    c.BackColor = Theme.Surface;    // StyledButton draws itself from Theme.P
+                    c.Invalidate();
+                }
+                else if (c is CheckBox)
+                {
+                    c.BackColor = Theme.Bg;
+                    ((CheckBox)c).FlatAppearance.BorderColor = Theme.Sub;
                 }
                 else if (c is LinkLabel)
                 {
@@ -577,10 +697,29 @@ namespace MouseBatteryTray
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            Unsubscribe();
+            base.OnFormClosed(e);
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) Unsubscribe();
+            base.Dispose(disposing);
+        }
+
+        void Unsubscribe()
+        {
             host.StateChanged -= OnHostChanged;
             Lang.Changed -= OnLangChanged;
             Theme.Changed -= OnThemeChanged;
-            base.OnFormClosed(e);
+        }
+
+        // Tab 0 = General, 1 = Styles.
+        public void ShowTab(int index)
+        {
+            tabs.Selected = index;
+            table.Visible = index == 0;
+            styles.Visible = index == 1;
         }
 
         void Open(string target)
@@ -589,6 +728,26 @@ namespace MouseBatteryTray
             catch (Exception ex)
             {
                 MessageBox.Show(this, Lang.F("Err.OpenLink", ex.Message), Lang.T("App.Name"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+
+        // Folders are opened with explorer.exe directly: ShellExecute on a folder path depends on the "Folder"
+        // shell association, which can be broken or hijacked (error "not found", then later clicks do nothing).
+        void OpenFolder(string folder)
+        {
+            try
+            {
+                folder = Path.GetFullPath(folder);
+                Directory.CreateDirectory(folder);
+                if (!Directory.Exists(folder)) throw new DirectoryNotFoundException(folder);
+                string explorer = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "explorer.exe");
+                string log = Logger.FilePath;
+                string args = File.Exists(log) ? "/select,\"" + log + "\"" : "\"" + folder + "\"";
+                Process.Start(new ProcessStartInfo(explorer, args) { UseShellExecute = false });
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, Lang.F("Err.OpenFolder", folder, ex.Message), Lang.T("App.Name"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
         }
     }

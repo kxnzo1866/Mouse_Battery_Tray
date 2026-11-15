@@ -93,6 +93,20 @@ namespace MouseBatteryTray
             set { Set("Theme", MouseBatteryTray.Theme.Normalize(value)); }
         }
 
+        // Visual style of the windows and menu (see Theme.Styles).
+        public static string VisualStyle
+        {
+            get { return MouseBatteryTray.Theme.NormalizeStyle(Get("VisualStyle", "classic")); }
+            set { Set("VisualStyle", MouseBatteryTray.Theme.NormalizeStyle(value)); }
+        }
+
+        // Transparency effects of the styles (Mica, Acrylic); on by default.
+        public static bool Effects
+        {
+            get { return Get("TransparencyEffects", "1") != "0"; }
+            set { Set("TransparencyEffects", value ? "1" : "0"); }
+        }
+
         public static string SelectedDevice
         {
             get { return Get("SelectedDevice", ""); }
@@ -129,6 +143,13 @@ namespace MouseBatteryTray
         {
             get { return Get("AdaptiveReading", "1") != "0"; }
             set { Set("AdaptiveReading", value ? "1" : "0"); }
+        }
+
+        // Percentage drawn as digits in the tray icon instead of the battery (off by default).
+        public static bool IconPercent
+        {
+            get { return Get("IconPercent", "0") == "1"; }
+            set { Set("IconPercent", value ? "1" : "0"); }
         }
 
         // Diagnostic log file (off by default).

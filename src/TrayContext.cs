@@ -23,7 +23,7 @@ namespace MouseBatteryTray
         readonly System.Windows.Forms.Timer soonTimer = new System.Windows.Forms.Timer();   // reading soon after an event
         readonly TaskScheduler ui;
         readonly SynchronizationContext uiContext;
-        readonly ToolStripMenuItem itemHeader, itemDetails, itemRefresh, itemDevices, itemSettings, itemStartup, itemAlert, itemExit;
+        readonly ToolStripMenuItem itemHeader, itemDetails, itemRefresh, itemDevices, itemSettings, itemStartup, itemAlert, itemIconPercent, itemExit;
         readonly DeviceWatcher watcher;
         SettingsForm settings;
         EventWaitHandle showEvent;
@@ -52,7 +52,8 @@ namespace MouseBatteryTray
             Logger.Write("Mouse Battery Tray " + Updater.Format(Updater.Current) + " started (" +
                          (AppSettings.IsPortable ? "portable" : "standard") + ", " + Application.ExecutablePath + ")");
             Lang.Set(AppSettings.Language);
-            Theme.Set(AppSettings.Theme);
+            Theme.Mode = Theme.Normalize(AppSettings.Theme);
+            Theme.SetStyle(AppSettings.VisualStyle, AppSettings.Effects);
             selectedKey = AppSettings.SelectedDevice;
 
             itemHeader = new ToolStripMenuItem();
@@ -63,6 +64,7 @@ namespace MouseBatteryTray
             itemSettings = new ToolStripMenuItem("", null, delegate { ShowSettings(); });
             itemStartup = new ToolStripMenuItem("", null, delegate { ToggleStartup(); });
             itemAlert = new ToolStripMenuItem("", null, delegate { SetAlert(!AppSettings.AlertEnabled, AppSettings.AlertLevel); });
+            itemIconPercent = new ToolStripMenuItem("", null, delegate { SetIconPercent(!AppSettings.IconPercent); });
             itemExit = new ToolStripMenuItem("", null, delegate { ExitThread(); });
             menu.Items.Add(itemHeader);
             menu.Items.Add(new ToolStripSeparator());
@@ -73,14 +75,20 @@ namespace MouseBatteryTray
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(itemStartup);
             menu.Items.Add(itemAlert);
+            menu.Items.Add(itemIconPercent);
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add(itemExit);
             menu.Renderer = Theme.MenuRenderer();
+            menu.Font = Theme.MenuFont();
+            itemDevices.DropDown.Font = menu.Font;
+            menu.HandleCreated += delegate { Theme.ApplyMenuWindow(menu); };
+            itemDevices.DropDown.HandleCreated += delegate { Theme.ApplyMenuWindow(itemDevices.DropDown); };
             menu.Opening += delegate
             {
                 itemStartup.Checked = AppSettings.StartupEnabled();
                 itemAlert.Checked = AppSettings.AlertEnabled;
                 itemAlert.Text = Lang.F("Menu.Alert", Lang.Pct(AppSettings.AlertLevel));
+                itemIconPercent.Checked = AppSettings.IconPercent;
                 FillDeviceMenu();
             };
 
@@ -168,6 +176,7 @@ namespace MouseBatteryTray
             itemSettings.Text = Lang.T("Menu.Settings");
             itemStartup.Text = Lang.T("Menu.Startup");
             itemAlert.Text = Lang.F("Menu.Alert", Lang.Pct(AppSettings.AlertLevel));
+            itemIconPercent.Text = Lang.T("Menu.IconPercent");
             itemExit.Text = Lang.T("Menu.Exit");
             FillDeviceMenu();
         }
@@ -181,15 +190,20 @@ namespace MouseBatteryTray
         void OnThemeChanged(object sender, EventArgs e)
         {
             menu.Renderer = Theme.MenuRenderer();
+            menu.Font = Theme.MenuFont();
+            itemDevices.DropDown.Font = menu.Font;
+            Theme.ApplyMenuWindow(menu);
+            Theme.ApplyMenuWindow(itemDevices.DropDown);
         }
 
-        // Windows switched between light and dark: follow it in "system" mode, and redraw the tray icon.
+        // Windows switched between light and dark (or changed its accent colour / transparency):
+        // follow it, and redraw the tray icon.
         void OnWindowsPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
         {
             if (e.Category != UserPreferenceCategory.General) return;
             uiContext.Post(delegate
             {
-                if (Theme.Mode == "system") Theme.Notify();
+                Theme.Notify();
                 Render();
             }, null);
         }
@@ -277,6 +291,20 @@ namespace MouseBatteryTray
             RaiseStateChanged();
         }
 
+        public void SetVisualStyle(string style)
+        {
+            AppSettings.VisualStyle = style;
+            Theme.SetStyle(style, Theme.Effects);
+            RaiseStateChanged();
+        }
+
+        public void SetEffects(bool on)
+        {
+            AppSettings.Effects = on;
+            Theme.SetStyle(Theme.Style, on);
+            RaiseStateChanged();
+        }
+
         public bool SetStartup(bool on, out string error)
         {
             error = null;
@@ -298,6 +326,13 @@ namespace MouseBatteryTray
         {
             AppSettings.IntervalSeconds = seconds;
             Schedule(false);
+            RaiseStateChanged();
+        }
+
+        public void SetIconPercent(bool on)
+        {
+            AppSettings.IconPercent = on;
+            Render();
             RaiseStateChanged();
         }
 
@@ -553,7 +588,7 @@ namespace MouseBatteryTray
             }
 
             Icon old = currentIcon;
-            currentIcon = Ui.MakeIcon(level, mode, SystemInformation.SmallIconSize.Width, Ui.IsTaskbarDark());
+            currentIcon = Ui.MakeIcon(level, mode, SystemInformation.SmallIconSize.Width, Ui.IsTaskbarDark(), AppSettings.IconPercent);
             tray.Icon = currentIcon;
             if (old != null) old.Dispose();
             tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;

@@ -11,28 +11,48 @@ Shows the battery level of a wireless **Pulsar** or **Logitech** mouse in the Wi
 ## Features
 
 - **Battery-shaped icon** that fills according to the level: green, then orange, then red. It turns blue with a lightning bolt while charging.
+- **Percentage on the icon** (optional): the level is drawn as digits in the icon, with a thin colored bar below, so there is no need to hover it. Digits turn red under 20%.
 - **Left click**: details window (mouse name, percentage, status, voltage, connection type, time of the last reading). The gear in its top-right corner opens the settings.
-- **Right click**: show details, refresh, mouse to display, settings, start with Windows, low battery alert, exit.
+- **Right click**: show details, refresh, mouse to display, settings, start with Windows, low battery alert, percentage on the icon, exit.
 - **Several mice**: the icon shows the first mouse that answers; when more than one is detected, pick the one to display from the right-click menu or the settings. The low battery alert works for every detected mouse.
 - **English and French**, **light, dark or system theme** (see [Settings](#settings)).
+- **Six visual styles**: Classic, Fluent Design (Windows 11), Liquid Glass, Material You, Metro (Windows 8) and Aero (Windows 7), with real Acrylic blur and Mica on Windows 11 (see [Visual styles](#visual-styles)).
 - A single `.exe`, nothing else to install on Windows 10 and 11.
 
 ## Settings
 
-Open them with the gear of the details window, or with **Settings…** in the right-click menu. It is a normal window with its own taskbar button; closing it does not stop the app. Every change applies at once:
+Open them with the gear of the details window, or with **Settings…** in the right-click menu. It is a normal window with its own taskbar button and two tabs, **General** and **Styles** (Ctrl+Tab switches between them); closing it does not stop the app. Every change applies at once:
 
-| Setting | Choices |
-| --- | --- |
-| Language | Français / English. On first launch the app uses the language chosen in the installer, otherwise the Windows language (English by default). |
-| Theme | System (follows Windows), Light, Dark. Applies to the details window, the settings window (title bar included) and the right-click menu. |
-| Start with Windows | On / off |
-| Low battery alert | On / off, and the threshold (5% to 50%, 15% by default) |
-| Mouse to display | Automatic, or one of the detected mice (when several are detected) |
-| Read the mouse every | 30 s, 1, 2, 5 or 10 min (1 min by default) |
-| Read less often while the level does not change | On by default (see [When the mouse is read](#when-the-mouse-is-read)) |
-| Write a diagnostic log | Off by default (see [Reporting a problem](#reporting-a-problem)) |
+| Setting | Tab | Choices |
+| --- | --- | --- |
+| Language | General | Français / English. On first launch the app uses the language chosen in the installer, otherwise the Windows language (English by default). |
+| Theme | Styles | System (follows Windows), Light, Dark. Applies to the details window, the settings window (title bar included) and the right-click menu. |
+| Visual style | Styles | Classic (default), Fluent Design, Liquid Glass, Material You, Metro, Aero. Each card shows a live preview. |
+| Transparency effects (Mica, Acrylic) | Styles | On by default. Off: the glass styles use an opaque background. |
+| Start with Windows | General | On / off |
+| Low battery alert | General | On / off, and the threshold (5% to 50%, 15% by default) |
+| Show the percentage on the tray icon | General | Off by default. The battery drawing is kept while charging and when no level is known. |
+| Mouse to display | General | Automatic, or one of the detected mice (when several are detected) |
+| Read the mouse every | General | 30 s, 1, 2, 5 or 10 min (1 min by default) |
+| Read less often while the level does not change | General | On by default (see [When the mouse is read](#when-the-mouse-is-read)) |
+| Write a diagnostic log | General | Off by default (see [Reporting a problem](#reporting-a-problem)) |
 
 The settings window also has a **Refresh now** button and an **About** section (version, GitHub page, license, and why the level is off while charging).
+
+### Visual styles
+
+The style applies to the details window, the settings window (buttons, tabs, title bar) and the right-click menu, in light and dark mode.
+
+| Style | Look |
+| --- | --- |
+| Classic | The original look. |
+| Fluent Design | Windows 11: Segoe UI Variable, rounded corners and controls, Acrylic details window, Mica title bar on the settings window (Windows 11 22H2+). Accent from the Windows accent colour. |
+| Liquid Glass | Very clear Acrylic glass with a top highlight, a bright rim and capsule buttons. WinForms cannot do real refraction, so this is an approximation. |
+| Material You | Every colour is a tone of the Windows accent colour; pill-shaped filled buttons, rows on a raised card with a soft shadow. |
+| Metro | Flat, square corners, a coloured tile band and title bar, large thin type. |
+| Aero | Bluish Acrylic glass with a diagonal reflection, glossy buttons and level bar, blue title bar. |
+
+Acrylic needs Windows 10 1803 or later and the Windows transparency effects turned on; otherwise (or with **Transparency effects** off) the glass styles fall back to an opaque background. Title bar colours and corners need Windows 11.
 
 ### When the mouse is read
 
@@ -127,6 +147,13 @@ To also build the installer (into `dist\`), install [Inno Setup 6](https://jrsof
 .\build.ps1 -Setup
 ```
 
+To sign the exe and the installer (Authenticode, so Windows SmartScreen shows a verified publisher instead of "Unknown publisher"), install a code-signing certificate in `Cert:\CurrentUser\My`, install the Windows SDK (for `signtool.exe`), then set its thumbprint before building:
+
+```powershell
+$env:MBT_SIGN_CERT = "<certificate SHA-1 thumbprint>"
+.\build.ps1 -Setup
+```
+
 | File | Purpose |
 | --- | --- |
 | `src/MouseBatteryTray.cs` | Mouse detection, Pulsar and Logitech HID++ protocols |
@@ -138,8 +165,9 @@ To also build the installer (into `dist\`), install [Inno Setup 6](https://jrsof
 | `src/DeviceWatcher.cs` | Device plugged in / out notifications, reading pace |
 | `src/Logger.cs` | Optional diagnostic log with size rotation |
 | `src/Lang.cs` | All the texts, in English and French |
-| `src/Theme.cs` | Light / dark theme |
-| `src/Ui.cs` | Tray icon and gear drawing |
+| `src/Theme.cs` | Light / dark theme, title bar, right-click menu drawing |
+| `src/Styles.cs` | Visual styles (colours, fonts, shapes), Acrylic / DWM calls, styled buttons, tabs and style cards |
+| `src/Ui.cs` | Tray icon, gear and sample wallpaper drawing |
 | `src/Program.cs` | Entry point, diagnostic and preview modes |
 | `build.ps1` | Builds the exe and the installer |
 | `installer/setup.iss` | Installer script |

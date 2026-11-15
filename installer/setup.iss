@@ -5,6 +5,8 @@
 
 #define AppName "Mouse Battery Tray"
 #define AppVersion "1.4.0"
+#define AppPublisher "kxnzo1866"
+#define AppUrl "https://github.com/kxnzo1866/Mouse_Battery_Tray"
 #define AppExe "MouseBatteryTray.exe"
 #define RunValue "MouseBatteryTray"
 ; Created by the running app (src\Program.cs): tells whether it is still open.
@@ -18,6 +20,20 @@ AppId={{F3477553-85CB-47BC-8BBF-E7B255F3805A}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
+AppPublisher={#AppPublisher}
+AppPublisherURL={#AppUrl}
+AppSupportURL={#AppUrl}/issues
+AppUpdatesURL={#AppUrl}/releases
+AppCopyright=Copyright (c) 2026 {#AppPublisher}
+VersionInfoCompany={#AppPublisher}
+VersionInfoProductName={#AppName}
+VersionInfoVersion={#AppVersion}
+; Authenticode signing (removes SmartScreen's "Unknown publisher"): only when build.ps1 finds a
+; code-signing certificate (it then passes /DSign=1 and the "signcmd" tool to ISCC).
+#ifdef Sign
+SignTool=signcmd
+SignedUninstaller=yes
+#endif
 DefaultDirName={autopf}\{#AppName}
 ; No administrator rights: everything is installed in the user's profile.
 PrivilegesRequired=lowest
