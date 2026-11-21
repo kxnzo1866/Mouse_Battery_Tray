@@ -4,7 +4,7 @@
 ; Silent install for testing: /VERYSILENT /LANG=french|english /DIR="..." and /PORTABLE=1 for the portable mode.
 
 #define AppName "Mouse Battery Tray"
-#define AppVersion "1.5.0"
+#define AppVersion "1.6.0"
 #define AppPublisher "kxnzo1866"
 #define AppUrl "https://github.com/kxnzo1866/Mouse_Battery_Tray"
 #define AppExe "MouseBatteryTray.exe"

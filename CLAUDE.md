@@ -31,7 +31,7 @@ Windows tray app (C# / WinForms, .NET Framework 4.x) showing the battery of Puls
 - Theme changes must cover the details window, settings window (title bar too) and context menu.
 - Colours come from `Theme.P` (current `Palette`), never hard-coded per window. While Acrylic is on, the details window paints alpha 0 + GDI+ only (no GDI/TextRenderer text).
 - Portable mode must never write to the registry.
-- Release: bump version in BOTH `src/MouseBatteryTray.cs` (`AssemblyVersion`) and `installer/setup.iss` (`AppVersion`); tag `vX.Y.Z`; attach `MouseBatteryTray-Setup-X.Y.Z.exe` to the GitHub release.
+- Release: bump version in BOTH `src/MouseBatteryTray.cs` (`AssemblyVersion` + `AssemblyFileVersion`) and `installer/setup.iss` (`AppVersion`); tag `vX.Y.Z`; attach `MouseBatteryTray-Setup-X.Y.Z.exe` to the GitHub release.
 - Update the README (features, settings table, file table) when behavior changes.
 
 ## Don't read
