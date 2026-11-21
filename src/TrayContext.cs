@@ -336,6 +336,13 @@ namespace MouseBatteryTray
             RaiseStateChanged();
         }
 
+        public void SetColorLevels(int green, int yellow)
+        {
+            AppSettings.SetColorLevels(green, yellow);
+            Render();
+            RaiseStateChanged();
+        }
+
         public bool Adaptive { get { return AppSettings.Adaptive; } }
 
         public void SetAdaptive(bool on)

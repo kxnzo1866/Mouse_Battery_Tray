@@ -10,8 +10,8 @@ Shows the battery level of a wireless **Pulsar** or **Logitech** mouse in the Wi
 
 ## Features
 
-- **Battery-shaped icon** that fills according to the level: green, then orange, then red. It turns blue with a lightning bolt while charging.
-- **Percentage on the icon** (optional): the level is drawn as digits in the icon, with a thin colored bar below, so there is no need to hover it. Digits turn red under 20%.
+- **Battery-shaped icon** that fills according to the level: green, then orange, then red (thresholds adjustable in the settings, 50% and 20% by default). It turns blue with a lightning bolt while charging.
+- **Percentage on the icon** (optional): the level is drawn as digits in the icon, with a thin colored bar below, so there is no need to hover it. Digits turn red below the yellow threshold.
 - **Left click**: details window (mouse name, percentage, status, voltage, connection type, time of the last reading). The gear in its top-right corner opens the settings.
 - **Right click**: show details, refresh, mouse to display, settings, start with Windows, low battery alert, percentage on the icon, exit.
 - **Several mice**: the icon shows the first mouse that answers; when more than one is detected, pick the one to display from the right-click menu or the settings. The low battery alert works for every detected mouse.
@@ -32,6 +32,7 @@ Open them with the gear of the details window, or with **Settings…** in the ri
 | Start with Windows | General | On / off |
 | Low battery alert | General | On / off, and the threshold (5% to 50%, 15% by default) |
 | Show the percentage on the tray icon | General | Off by default. The battery drawing is kept while charging and when no level is known. |
+| Green icon from / Yellow icon from | General | Levels where the icon turns green (50% by default) and yellow (20% by default); red below. Yellow always stays at least 5 points under green. |
 | Mouse to display | General | Automatic, or one of the detected mice (when several are detected) |
 | Read the mouse every | General | 30 s, 1, 2, 5 or 10 min (1 min by default) |
 | Read less often while the level does not change | General | On by default (see [When the mouse is read](#when-the-mouse-is-read)) |

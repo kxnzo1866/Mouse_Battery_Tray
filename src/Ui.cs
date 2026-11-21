@@ -37,8 +37,8 @@ namespace MouseBatteryTray
         public static Color LevelColor(int percent, bool charging)
         {
             if (charging) return Color.FromArgb(31, 111, 235);
-            if (percent >= 50) return Color.FromArgb(40, 160, 70);
-            if (percent >= 20) return Color.FromArgb(214, 134, 0);
+            if (percent >= AppSettings.GreenLevel) return Color.FromArgb(40, 160, 70);
+            if (percent >= AppSettings.YellowLevel) return Color.FromArgb(214, 134, 0);
             return Color.FromArgb(214, 48, 49);
         }
 
@@ -230,7 +230,7 @@ namespace MouseBatteryTray
             Color line = darkTaskbar ? Color.White : Color.FromArgb(30, 30, 30);
             Color level = dim ? Color.FromArgb(140, 140, 140) : LevelColor(percent, false);
             // Digits in the taskbar colour (best contrast), red when the battery is low.
-            Color text = dim ? Color.FromArgb(150, line) : percent < 20 ? level : line;
+            Color text = dim ? Color.FromArgb(150, line) : percent < AppSettings.YellowLevel ? level : line;
 
             float barH = Math.Max(2f, (float)Math.Round(2.5f * u));
             RectangleF digits = new RectangleF(0, 0, size, size - barH - Math.Max(1f, (float)Math.Round(u)));

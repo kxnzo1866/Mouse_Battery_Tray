@@ -25,6 +25,7 @@ namespace MouseBatteryTray
         void SetInterval(int seconds);
         void SetAdaptive(bool on);
         void SetIconPercent(bool on);
+        void SetColorLevels(int green, int yellow);
         void SetLogging(bool on);
         DateTime NextRefresh { get; }
         void RefreshNow();
@@ -66,6 +67,10 @@ namespace MouseBatteryTray
         readonly ComboBox cLanguage = new ComboBox(), cTheme = new ComboBox(), cMouse = new ComboBox(), cInterval = new ComboBox();
         readonly CheckBox xStartup = new CheckBox(), xAlert = new CheckBox(), xIconPercent = new CheckBox();
         readonly NumericUpDown nAlert = new NumericUpDown();
+
+        // Icon colour thresholds (green from / yellow from, red below)
+        readonly Label lGreen = new Label(), lYellow = new Label(), lGreenPct = new Label(), lYellowPct = new Label(), lColorHint = new Label();
+        readonly NumericUpDown nGreen = new NumericUpDown(), nYellow = new NumericUpDown();
         readonly Button bRefresh = new StyledButton(), bClose = new StyledButton();
         readonly LinkLabel kGitHub = new LinkLabel(), kLicense = new LinkLabel();
         readonly List<string> mouseKeys = new List<string>();
@@ -127,6 +132,10 @@ namespace MouseBatteryTray
             Row(xAlert, Flow(nAlert, lPercent));
             Check(xIconPercent);
             Row(xIconPercent, null);
+            Row(Caption(lGreen), Flow(Spin(nGreen), PctLabel(lGreenPct)));
+            Row(Caption(lYellow), Flow(Spin(nYellow), PctLabel(lYellowPct)));
+            Hint(lColorHint);
+            Row(lColorHint, null);
             Row(Caption(lMouse), Combo(cMouse));
             Hint(lMouseHint);
             Row(lMouseHint, null);
@@ -261,6 +270,8 @@ namespace MouseBatteryTray
             xAlert.CheckedChanged += delegate { nAlert.Enabled = xAlert.Checked; if (!loading) host.SetAlert(xAlert.Checked, (int)nAlert.Value); };
             nAlert.ValueChanged += delegate { if (!loading) host.SetAlert(xAlert.Checked, (int)nAlert.Value); };
             xIconPercent.CheckedChanged += delegate { if (!loading) host.SetIconPercent(xIconPercent.Checked); };
+            nGreen.ValueChanged += delegate { if (!loading) host.SetColorLevels((int)nGreen.Value, (int)nYellow.Value); };
+            nYellow.ValueChanged += delegate { if (!loading) host.SetColorLevels((int)nGreen.Value, (int)nYellow.Value); };
             cMouse.SelectedIndexChanged += delegate
             {
                 if (loading || cMouse.SelectedIndex < 0) return;
@@ -387,6 +398,24 @@ namespace MouseBatteryTray
             b.Anchor = AnchorStyles.Left;
         }
 
+        NumericUpDown Spin(NumericUpDown n)
+        {
+            n.Minimum = 0;
+            n.Maximum = 100;
+            n.Increment = 5;
+            n.Width = S(64);
+            n.BorderStyle = BorderStyle.FixedSingle;
+            n.Margin = new Padding(0, S(3), S(4), S(3));
+            return n;
+        }
+
+        Label PctLabel(Label l)
+        {
+            l.AutoSize = true;
+            l.Anchor = AnchorStyles.Left;
+            return l;
+        }
+
         FlowLayoutPanel Flow(params Control[] items)
         {
             FlowLayoutPanel f = new FlowLayoutPanel();
@@ -415,6 +444,11 @@ namespace MouseBatteryTray
             xAlert.Text = Lang.T("Set.Alert");
             lPercent.Text = Lang.Pct("").Trim();
             xIconPercent.Text = Lang.T("Set.IconPercent");
+            lGreen.Text = Lang.T("Set.ColorGreen");
+            lYellow.Text = Lang.T("Set.ColorYellow");
+            lGreenPct.Text = lPercent.Text;
+            lYellowPct.Text = lPercent.Text;
+            lColorHint.Text = Lang.T("Set.ColorHint");
             lMouse.Text = Lang.T("Set.Mouse");
             lMouseHint.Text = Lang.T("Set.MouseHint");
             lInterval.Text = Lang.T("Set.Interval");
@@ -603,6 +637,14 @@ namespace MouseBatteryTray
             nAlert.Value = AppSettings.AlertLevel;
             nAlert.Enabled = xAlert.Checked;
             xIconPercent.Checked = AppSettings.IconPercent;
+            // Ranges keep yellow below green; Value is set after the widest range so it is never clamped.
+            nGreen.Minimum = 0; nGreen.Maximum = 100; nYellow.Minimum = 0; nYellow.Maximum = 100;
+            nGreen.Value = AppSettings.GreenLevel;
+            nYellow.Value = AppSettings.YellowLevel;
+            nGreen.Minimum = nYellow.Value + AppSettings.ColorGap;
+            nGreen.Maximum = AppSettings.GreenMax;
+            nYellow.Minimum = AppSettings.YellowMin;
+            nYellow.Maximum = nGreen.Value - AppSettings.ColorGap;
             cInterval.SelectedIndex = Math.Max(0, Array.IndexOf(AppSettings.Intervals, AppSettings.IntervalSeconds));
             xAdaptive.Checked = AppSettings.Adaptive;
             xLog.Checked = AppSettings.LogEnabled;
@@ -628,7 +670,7 @@ namespace MouseBatteryTray
             Style(this);
             foreach (Label h in new Label[] { hGeneral, hBattery, hDiag, hUpdates, hAbout, hStyle })
                 h.ForeColor = p.HeaderFg;
-            foreach (Label l in new Label[] { lMouseHint, lChargeText, lUnofficial, lLast, lVersion, lLicense, lUpdate, lLogHint, lEffectsHint })
+            foreach (Label l in new Label[] { lColorHint, lMouseHint,lChargeText, lUnofficial, lLast, lVersion, lLicense, lUpdate, lLogHint, lEffectsHint })
                 l.ForeColor = p.Sub;
             tabs.Measure();
             ResumeLayout(true);

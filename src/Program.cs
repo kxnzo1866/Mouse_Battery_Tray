@@ -243,6 +243,7 @@ namespace MouseBatteryTray
             public void SetInterval(int seconds) { }
             public void SetAdaptive(bool on) { }
             public void SetIconPercent(bool on) { }
+            public void SetColorLevels(int green, int yellow) { }
             public void SetLogging(bool on) { }
             public void RefreshNow() { }
             public void Exit() { }

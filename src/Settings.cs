@@ -127,6 +127,39 @@ namespace MouseBatteryTray
             set { Set("AlertLevel", Math.Max(AlertMin, Math.Min(AlertMax, value)).ToString()); }
         }
 
+        // Icon colours: green from GreenLevel %, yellow from YellowLevel %, red below.
+        // Always YellowLevel <= GreenLevel - ColorGap. Cached: read on every icon/details repaint.
+        public const int ColorGap = 5, YellowMin = 5, GreenMax = 100, GreenDefault = 50, YellowDefault = 20;
+        static int greenCache = -1, yellowCache = -1;
+
+        public static int GreenLevel
+        {
+            get
+            {
+                if (greenCache < 0) greenCache = GetInt("ColorGreenLevel", GreenDefault, YellowMin + ColorGap, GreenMax);
+                return greenCache;
+            }
+        }
+
+        public static int YellowLevel
+        {
+            get
+            {
+                if (yellowCache < 0) yellowCache = GetInt("ColorYellowLevel", YellowDefault, YellowMin, GreenMax - ColorGap);
+                return Math.Min(yellowCache, GreenLevel - ColorGap);
+            }
+        }
+
+        public static void SetColorLevels(int green, int yellow)
+        {
+            green = Math.Max(YellowMin + ColorGap, Math.Min(GreenMax, green));
+            yellow = Math.Max(YellowMin, Math.Min(green - ColorGap, yellow));
+            greenCache = green;
+            yellowCache = yellow;
+            Set("ColorGreenLevel", green.ToString());
+            Set("ColorYellowLevel", yellow.ToString());
+        }
+
         public static int IntervalSeconds
         {
             get
